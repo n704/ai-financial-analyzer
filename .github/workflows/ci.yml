@@ -16,8 +16,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      # All provider/infra extras, so lint/typecheck/test cover every adapter
+      # (fake + Gemini LLM/embeddings, Chroma + pgvector, arq/Redis, S3) —
+      # mirrors `make install`. Only fake/Chroma/SQLite/in-memory are actually
+      # *exercised* by the unit suite; the rest just need to import and
+      # typecheck cleanly without a live service.
       - name: Sync dependencies
-        run: uv sync
+        run: uv sync --extra gemini --extra postgres --extra redis --extra storage --extra parse
 
       - name: Lint
         run: uv run ruff check .
@@ -28,7 +33,68 @@ jobs:
       - name: Typecheck
         run: uv run mypy app
 
-      - name: Unit tests
+      - name: Unit + contract tests (fake provider, SQLite, in-memory)
         run: uv run pytest
 
-  # Integration job (testcontainers Postgres/Redis) is added with the DB layer in P1.8.
+  # Real Postgres + Redis: migrations and the pgvector/Redis backends can't be
+  # exercised against SQLite/in-memory fakes. Kept as a separate job so a
+  # Postgres/Redis outage in CI infra doesn't block the fast lint/type/unit
+  # feedback loop above.
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: analyzer
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/analyzer
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --extra postgres --extra redis
+
+      - name: Alembic upgrade/downgrade against Postgres
+        run: |
+          uv run alembic -x db_url="$DATABASE_URL" upgrade head
+          uv run alembic -x db_url="$DATABASE_URL" downgrade base
+
+      - name: Redis connectivity smoke test (Cache.ping via RedisCache)
+        run: |
+          uv run python -c "
+          import asyncio
+          from redis.asyncio import Redis
+          from app.infra.redis_cache import RedisCache
+
+          async def main() -> None:
+              cache = RedisCache(Redis.from_url('$REDIS_URL'))
+              assert await cache.ping() is True
+              await cache.set('ci-smoke', 'ok', ttl_s=30)
+              assert await cache.get('ci-smoke') == 'ok'
+
+          asyncio.run(main())
+          "

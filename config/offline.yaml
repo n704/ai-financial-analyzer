@@ -1,0 +1,54 @@
+# Offline profile — air-gapped / private-data use. No API keys, no external
+# services, nothing leaves the machine: Ollama for the LLM and local
+# sentence-transformers for embeddings, on the same single-process SQLite +
+# in-memory stack as the dev profile.
+#
+# Requires the `offline` extra (ollama + sentence-transformers) and a running
+# local Ollama daemon. Embedding dimension differs from Gemini, so this profile
+# uses its own vector-store collection — never mix embedding spaces (index_meta
+# guard enforces this at startup).
+
+llm:
+  provider: ollama
+  model: llama3.1
+  base_url: http://localhost:11434
+  options:
+    max_output_tokens: 16000
+
+embeddings:
+  provider: local
+  model: sentence-transformers/all-MiniLM-L6-v2
+
+vector_store:
+  provider: chroma
+  path: ./data/chroma
+  collection: chunks_offline
+
+database:
+  url: sqlite:///./data/app.db
+
+cache:
+  backend: memory
+
+queue:
+  backend: inprocess
+
+events:
+  backend: inprocess
+
+object_storage:
+  provider: local
+  path: ./data/pdfs
+
+chunking:
+  target_tokens: 800
+  overlap_tokens: 100
+
+limits:
+  max_upload_mb: 30
+  max_pages: 600
+  max_compare_docs: 5
+  quotas:
+    documents: 100
+    uploads_per_day: 20
+    questions_per_day: 200

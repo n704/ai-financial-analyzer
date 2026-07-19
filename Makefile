@@ -1,7 +1,13 @@
-.PHONY: install lint format typecheck test check run worker up up-scaled down
+.PHONY: install lint format typecheck test check run worker migrate migrate-down up up-scaled down
 
-install:        ## Install dependencies (incl. dev group)
-	uv sync
+# Extras beyond the zero-ops default install: gemini (real LLM/embeddings),
+# postgres (pgvector adapter), redis (arq queue + Redis cache/events), storage
+# (S3/MinIO), parse (PyMuPDF/pdfplumber, lands with P2 chunking). `make install`
+# pulls all of them so lint/typecheck/test exercise every adapter, matching CI.
+EXTRAS := --extra gemini --extra postgres --extra redis --extra storage --extra parse
+
+install:        ## Install dependencies (incl. dev group + all provider/infra extras)
+	uv sync $(EXTRAS)
 
 lint:           ## Ruff lint
 	uv run ruff check .
@@ -12,7 +18,7 @@ format:         ## Ruff format
 typecheck:      ## mypy on app/
 	uv run mypy app
 
-test:           ## Run pytest
+test:           ## Run pytest (fake provider, SQLite, in-memory — no external services)
 	uv run pytest
 
 check: lint typecheck test  ## Lint + typecheck + test (what CI runs)
@@ -22,6 +28,12 @@ run:            ## Run the API locally with reload
 
 worker:         ## Run the worker process
 	uv run python -m app.worker
+
+migrate:        ## Apply Alembic migrations to the configured database (APP_CONFIG)
+	uv run alembic upgrade head
+
+migrate-down:   ## Roll back one migration
+	uv run alembic downgrade -1
 
 up:             ## Bring up the base topology (single-process: SQLite + in-memory)
 	docker compose up --build

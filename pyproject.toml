@@ -14,20 +14,31 @@ dependencies = [
     "python-multipart>=0.0.12",
     "jinja2>=3.1",
     "httpx>=0.27",
+    # Default-profile essentials — the zero-external-services stack needs these
+    # installed even though it starts no servers: SQLite ORM + migrations, the
+    # local vector store, and auth primitives.
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "chromadb>=0.5",
+    "argon2-cffi>=23.1",
+    "pyjwt>=2.9",
+    "email-validator>=2.2",
 ]
 
-# Provider- and infra-specific dependencies land as their adapters do (P1/P2).
-# Grouping them as extras keeps the default install light and the profiles honest.
+# Provider- and infra-specific SDKs are extras, lazily imported by their adapters.
+# Grouping them here keeps the default install to the single-process stack above;
+# selecting a Postgres/Redis/S3/paid-provider profile installs the matching extra.
 [project.optional-dependencies]
-gemini = ["google-genai>=0.3"]
+gemini = [
+    "google-genai>=0.3",
+]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
 offline = ["ollama>=0.3", "sentence-transformers>=3.0"]
 parse = ["pymupdf>=1.24", "pdfplumber>=0.11"]
-db = ["sqlalchemy>=2.0", "alembic>=1.13", "psycopg[binary]>=3.2", "pgvector>=0.3"]
-queue = ["arq>=0.26", "redis>=5.0"]
+postgres = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
+redis = ["arq>=0.26", "redis>=5.0"]
 storage = ["boto3>=1.35"]
-auth = ["argon2-cffi>=23.1", "pyjwt>=2.9"]
 
 [dependency-groups]
 dev = [
@@ -66,6 +77,21 @@ files = ["app"]
 [[tool.mypy.overrides]]
 module = "app.domain.*"
 disallow_any_explicit = true
+
+# Vendor SDKs without bundled type stubs. Only adapter modules import these; core
+# code stays fully typed. Isolating the ignores here keeps that boundary honest.
+[[tool.mypy.overrides]]
+module = [
+    "chromadb.*",
+    "google.genai.*",
+    "google.*",
+    "redis.*",
+    "arq.*",
+    "boto3.*",
+    "botocore.*",
+    "pgvector.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-q"

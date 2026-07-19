@@ -8,12 +8,18 @@ ENV UV_COMPILE_BYTECODE=1 \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 
+# Extras needed by *some* profile this image might run: gemini (dev.yaml's
+# default LLM/embeddings), postgres + redis (scaled.yaml), storage (S3/MinIO
+# in scaled.yaml). Not `offline` — that profile targets bare-metal per
+# ARCHITECTURE.md §7, not this container.
+ARG PROFILE_EXTRAS="--extra gemini --extra postgres --extra redis --extra storage --extra parse"
+
 # Cache dependency layer separately from source.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev $PROFILE_EXTRAS
 
 COPY . .
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev $PROFILE_EXTRAS
 
 # --- Runtime stage: copy the venv + source, no build tooling ---
 FROM python:3.12-slim AS runtime

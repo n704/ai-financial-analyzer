@@ -1,0 +1,46 @@
+# Test profile — used by the pytest suite (and CI) via APP_CONFIG=config/test.yaml.
+# Fake LLM/embeddings so the whole app boots and is fully exercisable with zero
+# API keys and zero network calls (SPEC.md: "CI green: tests against the fake
+# provider on SQLite + in-memory"). Same shape as config/dev.yaml otherwise.
+
+llm:
+  provider: fake
+  model: fake-llm
+
+embeddings:
+  provider: fake
+  model: fake-embedding
+
+vector_store:
+  provider: chroma
+  path: ./data/test/chroma
+  collection: chunks_test
+
+database:
+  url: sqlite:///./data/test/app.db
+
+cache:
+  backend: memory
+
+queue:
+  backend: inprocess
+
+events:
+  backend: inprocess
+
+object_storage:
+  provider: local
+  path: ./data/test/pdfs
+
+chunking:
+  target_tokens: 800
+  overlap_tokens: 100
+
+limits:
+  max_upload_mb: 30
+  max_pages: 600
+  max_compare_docs: 5
+  quotas:
+    documents: 100
+    uploads_per_day: 20
+    questions_per_day: 200

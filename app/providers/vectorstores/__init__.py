@@ -1,1 +1,2 @@
-"""Vector-store adapters: pgvector (P1.9, default), plus Chroma/Qdrant/FAISS."""
+"""Vector-store adapters: Chroma (P1.9, default — local, no server), pgvector
+(P1.9, scaled profile), Qdrant/FAISS reserved for later."""

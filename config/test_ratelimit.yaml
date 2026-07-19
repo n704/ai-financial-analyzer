@@ -1,0 +1,50 @@
+# Same as config/test.yaml but with very low rate-limit thresholds, so the
+# rate-limiting middleware test (tests/unit/test_main.py) can trip a 429 in a
+# handful of requests instead of looping to the real per-minute limits.
+
+llm:
+  provider: fake
+  model: fake-llm
+
+embeddings:
+  provider: fake
+  model: fake-embedding
+
+vector_store:
+  provider: chroma
+  path: ./data/test_ratelimit/chroma
+  collection: chunks_test
+
+database:
+  url: sqlite:///./data/test_ratelimit/app.db
+
+cache:
+  backend: memory
+
+queue:
+  backend: inprocess
+
+events:
+  backend: inprocess
+
+object_storage:
+  provider: local
+  path: ./data/test_ratelimit/pdfs
+
+chunking:
+  target_tokens: 800
+  overlap_tokens: 100
+
+limits:
+  max_upload_mb: 30
+  max_pages: 600
+  max_compare_docs: 5
+  quotas:
+    documents: 100
+    uploads_per_day: 20
+    questions_per_day: 200
+
+rate_limit:
+  per_ip_per_minute: 3
+  per_user_per_minute: 3
+  auth_per_ip_per_minute: 2

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project State
 
-**P0 (bootstrap) is complete.** The scaffold, tooling, CI, and Docker topology exist; the app and worker boot but there is no product behavior yet. Feature work follows the phased plan.
+**P0 (bootstrap) and P1 (foundation) are complete.** Config system (fail-fast validation, env-var secret resolution, dev/scaled/offline/test profiles); provider protocols with fake + Gemini adapters (contract-tested) and Chroma/pgvector vector stores behind the embedding-space startup guard; `Cache`/`TaskQueue`/`EventBus` with in-memory + Redis backends; local/S3 object storage with signed URLs; SQLite/Postgres-portable DB models + Alembic migrations + user-scoped repositories; full auth cycle (register/login/rotating refresh/logout/delete-account); a FastAPI app wiring all of it together with request-id logging and per-IP/per-user rate limiting. No product behavior yet (no documents, no Q&A) — that starts at P2. Feature work follows the phased plan.
 
 Read these before implementing, in order: **[SPEC.md](SPEC.md)** (what — requirements, config system, API, data model), **[ARCHITECTURE.md](ARCHITECTURE.md)** (how — services, provider abstraction, flows), **[PLAN.md](PLAN.md)** (build order — P0–P5 with per-task exit criteria). They are the source of truth; keep them in sync when decisions change.
 
