@@ -1,0 +1,58 @@
+# Default profile — the INITIAL setup: SQLite + in-memory, zero external services.
+# The whole app runs single-process (API also runs ingestion jobs in-process).
+#
+# Every infra line below is a BACKEND you can swap via config with no code change —
+# see config/scaled.yaml for the Postgres + Redis variant. The config LOADER lands
+# in P1.1; this file is the shape it parses (SPEC.md §4).
+
+llm:
+  provider: gemini
+  model: gemini-2.5-flash
+  api_key_env: GEMINI_API_KEY
+  options:
+    max_output_tokens: 16000
+
+embeddings:
+  provider: gemini
+  model: gemini-embedding-001
+  api_key_env: GEMINI_API_KEY
+
+vector_store:
+  provider: chroma            # local, no server. Use pgvector when on Postgres.
+  path: ./data/chroma
+
+database:
+  url: sqlite:///./data/app.db   # any SQLAlchemy URL; postgresql+psycopg://... to scale
+
+cache:
+  backend: memory             # memory | redis
+  # url: ${REDIS_URL}         # required when backend: redis
+
+queue:
+  backend: inprocess          # inprocess | arq   (arq needs redis + a worker process)
+  # url: ${REDIS_URL}
+
+events:                        # SSE progress bus
+  backend: inprocess          # inprocess | redis
+  # url: ${REDIS_URL}
+
+object_storage:
+  provider: local             # local | s3
+  path: ./data/pdfs
+
+chunking:
+  target_tokens: 800
+  overlap_tokens: 100
+
+limits:
+  max_upload_mb: 30
+  max_pages: 600
+  max_compare_docs: 5
+  quotas:
+    documents: 100
+    uploads_per_day: 20
+    questions_per_day: 200
+
+# Note: in-memory cache/queue/events keep state inside one process — they imply a
+# single-process deployment. Switch the three backends to redis (config/scaled.yaml)
+# to run multiple API replicas + a separate worker.

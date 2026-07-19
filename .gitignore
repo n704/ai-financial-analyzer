@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Environment & secrets
+.env
+*.local
+
+# Runtime data (PDFs, vector store, sqlite)
+data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
