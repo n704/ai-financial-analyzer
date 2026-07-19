@@ -1,0 +1,18 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  # `language: system` (rather than mirrors-mypy's isolated env) so this runs
+  # against the project's own `uv`-synced venv — one dependency list
+  # (pyproject.toml's extras), not two kept in sync by hand.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy app
+        language: system
+        pass_filenames: false
+        files: ^app/

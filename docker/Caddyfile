@@ -1,0 +1,5 @@
+# Local dev: plain HTTP reverse proxy to the API.
+# In production, replace ":80" with your domain for automatic TLS.
+:80 {
+	reverse_proxy api:8000
+}

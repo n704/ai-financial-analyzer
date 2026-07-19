@@ -5,7 +5,7 @@ Production-ready RAG application that ingests financial report PDFs, analyzes th
 **Design principles:**
 
 - **Everything provider-shaped is configurable.** The LLM, embedding model, vector store, and databases are selected in a config file — no provider names hard-coded in application logic. Default LLM configuration uses **free-tier Gemini** so the app runs at zero model cost; paid providers are a config change.
-- **Production-ready.** Multi-user, durable storage, queued background processing, observability, and a defined security posture from day one. See [ARCHITECTURE.md](ARCHITECTURE.md) for the technical architecture.
+- **Production-ready, but starts small.** Multi-user, observability, and a defined security posture from day one. The **initial default runs single-process on SQLite + an in-memory cache/queue with zero external services**; the database and cache/queue/event backends are config choices, so scaling to Postgres + Redis is a config change, not a rewrite. See [ARCHITECTURE.md](ARCHITECTURE.md) for the technical architecture.
 
 ---
 
@@ -106,19 +106,27 @@ embeddings:
   api_key_env: GEMINI_API_KEY
 
 vector_store:
-  provider: pgvector            # pgvector | chroma | qdrant | faiss
-  # pgvector reuses database.url; others take their own connection settings
+  provider: chroma              # chroma | pgvector | qdrant | faiss
+  path: ./data/chroma           # pgvector reuses database.url; others take their own settings
 
 database:
-  url: ${DATABASE_URL}          # any SQLAlchemy URL; Postgres in production
+  url: sqlite:///./data/app.db  # any SQLAlchemy URL; postgresql+psycopg://... to scale
 
-object_storage:
-  provider: s3                  # s3 | local
-  bucket: reports
-  endpoint_env: S3_ENDPOINT     # MinIO locally, S3/R2 in production
+cache:
+  backend: memory               # memory | redis  (rate-limit counters, ephemeral cache)
+  # url: ${REDIS_URL}           # required when backend: redis
 
 queue:
-  url: ${REDIS_URL}
+  backend: inprocess            # inprocess | arq  (arq needs redis + a separate worker)
+  # url: ${REDIS_URL}
+
+events:                         # SSE progress bus
+  backend: inprocess            # inprocess | redis
+  # url: ${REDIS_URL}
+
+object_storage:
+  provider: local               # local | s3
+  path: ./data/pdfs             # s3: set `bucket` + `endpoint_env` instead
 
 chunking: { target_tokens: 800, overlap_tokens: 100 }
 
@@ -131,11 +139,13 @@ limits:
 
 **Profiles:**
 
-| Profile | LLM / Embeddings | Vector store | DB | Storage | Queue |
-|---|---|---|---|---|---|
-| `dev` (zero-ops) | Gemini free tier | Chroma (local) | SQLite | local disk | in-process |
-| `prod` (default) | Gemini free tier (paid providers opt-in) | **pgvector** | **Postgres** | S3-compatible | Redis + workers |
-| `offline` | Ollama + local sentence-transformers | Chroma | SQLite | local disk | in-process |
+| Profile | LLM / Embeddings | Vector store | DB | Cache / Queue / Events | Storage | Process model |
+|---|---|---|---|---|---|---|
+| `dev` **(default / initial)** | Gemini free tier | Chroma (local) | **SQLite** | **in-memory / in-process** | local disk | single process |
+| `scaled` (`config/scaled.yaml`) | Gemini free tier (paid opt-in) | pgvector | Postgres | **Redis** | S3-compatible | API replicas + worker |
+| `offline` | Ollama + local sentence-transformers | Chroma | SQLite | in-memory / in-process | local disk | single process |
+
+The default profile needs **no external services** — a SQLite file, an in-memory cache/queue, and local disk. `scaled` swaps four backend lines (`database`, `cache`, `queue`, `events`) to Postgres + Redis and adds a separate worker; nothing in application code changes.
 
 **Provider interfaces** (contracts application code depends on — full detail in [ARCHITECTURE.md](ARCHITECTURE.md)):
 
@@ -149,6 +159,7 @@ limits:
 - Structured output is the adapter's problem — each adapter maps a Pydantic schema to its provider's mechanism (Gemini `response_schema`, OpenAI structured outputs, Anthropic `output_config.format`) and validates before returning.
 - Embedding changes invalidate the index — the store records `embedding_model` + `dimension` per collection; a config mismatch at startup is a hard error offering explicit re-indexing, never silent mixing.
 - Prompts are provider-neutral; provider-specific tuning (thinking budgets, prompt caching) lives inside adapters as optional optimizations.
+- **Infrastructure is a backend, not a fork.** Database (SQLAlchemy URL), cache, queue, and the SSE event bus each sit behind an interface with a default in-memory/in-process implementation and a Redis (and Postgres, for the DB) implementation. Core code depends on `Cache` / `TaskQueue` / `EventBus`, never on `redis`/`arq` directly. Choosing in-memory backends implies a single process; choosing Redis unlocks multiple API replicas + a separate worker.
 
 ---
 
@@ -182,7 +193,7 @@ All endpoints under `/api/v1`, JWT-authenticated except auth endpoints. OpenAPI 
 
 - Q&A first token < 5s (p95) on hosted providers; API reads < 300ms (p95).
 - Ingestion of a 150-page report < 5 min on paid tiers; free-tier throttling surfaces as progress, not failure.
-- Target availability 99.5%. API and workers are stateless and horizontally scalable; state lives in Postgres, Redis, and object storage.
+- Target availability 99.5%. The default single-process profile (SQLite + in-memory) suits small/personal deployments; the `scaled` profile makes the API stateless and horizontally scalable with a separate worker, state living in Postgres, Redis, and object storage. The switch is config-only.
 - Graceful degradation: if the LLM provider is down, library/search/reading remain available; analysis and Q&A return a clear provider-outage error.
 
 ### Correctness

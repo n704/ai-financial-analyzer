@@ -17,7 +17,7 @@ Groundwork before feature work. No product behavior yet.
 | P0.1 | Repo scaffold: `app/` package per ARCHITECTURE §2 layout, `pyproject.toml`, `uv` lockfile, Python 3.12 | `uv sync` installs; `app` imports |
 | P0.2 | Tooling: ruff (lint+format), mypy (strict on `domain/`), pytest, pre-commit hooks | `make check` runs lint+type+test clean on empty repo |
 | P0.3 | CI pipeline (GitHub Actions): lint → typecheck → unit → integration (testcontainers Postgres) | CI green on an empty PR |
-| P0.4 | Docker: one multi-stage image, entrypoint switch (`api`/`worker`); `docker-compose.yml` with proxy/api/worker/postgres/redis/minio | `docker compose up` boots all services, health checks pass |
+| P0.4 | Docker: one multi-stage image, entrypoint switch (`api`/`worker`); base `docker-compose.yml` (single-process: api + proxy, SQLite/local volume) + `docker-compose.scaled.yml` override (postgres/redis/minio/worker) | base `docker compose up` boots api healthy; scaled override adds the rest |
 | P0.5 | Dev ergonomics: `Makefile` / `justfile`, `.env.example`, README quickstart | New dev goes from clone → running app in < 10 min |
 
 **Exit:** empty app boots locally and in CI; containers healthy.
@@ -49,20 +49,22 @@ The abstraction seams. Nothing here is user-visible except auth, but everything 
   *Done when:* both Gemini adapters + fakes are green.
 
 ### Persistence → P1.1
-- **P1.8** DB layer — SQLAlchemy models per ARCHITECTURE §5, Alembic baseline migration, repository pattern with mandatory `user_id` scoping.
-  *Done when:* migrate up/down clean; testcontainers Postgres in CI.
-- **P1.9** pgvector `VectorStore` adapter + `index_meta` startup guard (mismatch → hard error + `reindex` command stub).
-  *Done when:* upsert/query/delete round-trip a vector; embedding-model mismatch is caught at startup.
-- **P1.10** Object storage abstraction (`s3` via boto3/MinIO, `local` for dev) + signed-URL generation.
-  *Done when:* put/get/delete + signed URL work against MinIO and local disk.
+- **P1.8** DB layer — SQLAlchemy models per ARCHITECTURE §5, **SQLite default** (any SQLAlchemy URL; Postgres for the scaled profile), Alembic baseline migration, repository pattern with mandatory `user_id` scoping. Use portable column types (arrays/jsonb→JSON, citext→NOCASE text) so the same models run on both engines.
+  *Done when:* migrate up/down clean on SQLite **and** Postgres; every repository method is user-scoped.
+- **P1.9** `VectorStore` adapter — **Chroma** (default, local) + `index_meta` startup guard (mismatch → hard error + `reindex` command stub); pgvector adapter behind the same interface for the scaled profile.
+  *Done when:* upsert/query/delete round-trip a vector on Chroma; embedding-model mismatch caught at startup; pgvector passes the same VectorStore contract.
+- **P1.10** Infra backends — `Cache` / `TaskQueue` / `EventBus` interfaces with **in-memory / in-process defaults** + Redis backends; factory wiring + startup validation (reject a Redis backend with no URL; reject in-memory backends when configured for multi-process).
+  *Done when:* a rate-limit counter, a background job, and a progress event each work on the in-memory backend; the Redis backend passes the same interface tests.
+- **P1.11** Object storage abstraction (`local` default, `s3` via boto3/MinIO) + signed-URL generation.
+  *Done when:* put/get/delete + signed URL work against local disk and MinIO.
 
 ### Auth → P1.8
-- **P1.11** Auth: register/login/refresh/logout, Argon2id hashing, JWT access + rotating refresh (hashed, revocable), `delete /auth/account`.
+- **P1.12** Auth: register/login/refresh/logout, Argon2id hashing, JWT access + rotating refresh (hashed, revocable), `delete /auth/account`.
   *Done when:* full auth cycle works; refresh rotation + revocation tested.
-- **P1.12** API skeleton: FastAPI app factory, auth middleware, per-user + per-IP rate limiting (Redis token bucket), `/healthz` + `/readyz`, structured logging (structlog).
-  *Done when:* authenticated request reaches a protected route; unauth is rejected; readiness checks DB/Redis/vector store.
+- **P1.13** API skeleton: FastAPI app factory, auth middleware, per-user + per-IP rate limiting **via the `Cache` interface (in-memory default)**, `/healthz` + `/readyz`, structured logging (structlog).
+  *Done when:* authenticated request reaches a protected route; unauth is rejected; readiness checks the DB, vector store, and (when selected) Redis.
 
-**Exit (spec P1):** swapping `llm.model` in config changes behavior with no code change; authenticated CRUD on an empty library; CI green with tests against the fake provider.
+**Exit (spec P1):** swapping `llm.model` in config changes behavior with no code change; switching `database`/`cache`/`queue`/`events` to the Postgres/Redis backends is config-only; authenticated CRUD on an empty library; CI green with tests against the fake provider on SQLite + in-memory.
 
 ---
 
@@ -174,7 +176,7 @@ gantt
 
 **Critical path:** P1.1 config → P1.2/1.3 provider seam → P1.5 Gemini adapter → P2.5–2.7 ingestion stages → P3.2 retriever → P4.1 deltas. Everything else (UI, storage, auth, observability) can proceed alongside once the seam exists.
 
-**Parallelizable early:** auth (P1.11–12), object storage (P1.10), and DB (P1.8) have no dependency on the provider adapters and can be built in parallel with P1.5–1.7.
+**Parallelizable early:** auth (P1.12–13), object storage (P1.11), infra backends (P1.10), and DB (P1.8) have no dependency on the provider adapters and can be built in parallel with P1.5–1.7.
 
 ---
 
@@ -187,6 +189,7 @@ gantt
 | Structured output unreliable on weaker/local models | Extraction fails schema | Adapter validation + one retry; Ollama JSON-mode loop; keep Gemini as the quality default |
 | Provider API drift (SDK/model changes) | Adapter breaks | Contract suite (P1.7) catches drift; adapters are the only vendor-coupled code |
 | Embedding config change corrupts index | Mixed vector spaces → silent bad retrieval | `index_meta` startup guard + explicit `reindex` (P1.9/P5.2) |
+| SQLite single-writer / in-memory state under load | Write contention; state lost on restart | Fine at initial single-process scale; the config-only switch to Postgres + Redis (scaled profile) removes it — portable types mean no schema rewrite |
 | Model hallucinates citations/numbers | Untrustworthy output | Marker validation (P3.1), nullable-metrics + `source_page` (P2.4), Python-computed deltas (P4.1) |
 
 ---

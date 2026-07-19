@@ -1,0 +1,39 @@
+# Base topology: a single API container running the app single-process —
+# SQLite + in-memory cache/queue/events + local file storage. No external services.
+#
+# To scale out (Postgres + Redis + MinIO + a separate worker), layer the override:
+#   docker compose -f docker-compose.yml -f docker-compose.scaled.yml up --build
+# (or `make up-scaled`).
+services:
+  proxy:
+    image: caddy:2-alpine
+    depends_on: [api]
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+
+  api:
+    build: .
+    command: ["api"]
+    environment:
+      APP_CONFIG: config/dev.yaml
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - app_data:/app/data      # SQLite db, Chroma index, uploaded PDFs
+    expose: ["8000"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  app_data:
+  caddy_data:

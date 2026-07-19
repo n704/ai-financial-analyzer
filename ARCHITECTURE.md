@@ -22,40 +22,51 @@ flowchart LR
 
 Trust boundaries: everything left of `EXT` runs inside the deployment; model providers are external and receive document content (except in the `offline` profile, where Ollama + local embeddings keep all data on-machine).
 
+> The diagram shows the **scaled** topology. The **default is single-process**: one API process holds the SQLite database (via a file), an in-memory cache/queue/event bus, and local-disk PDF storage — no Postgres, Redis, or object store. Postgres/Redis/worker appear only when the `scaled` profile selects those backends (see §2, §7).
+
 ---
 
 ## 2. Services
 
-Two deployable services built from one codebase (same image, different entrypoint), plus managed state:
+The app has **two run modes**, chosen entirely by config (`database`, `cache`, `queue`, `events`, `object_storage`) — the same image builds both:
 
-| Service | Responsibility | Scaling |
+- **Single-process (default, `config/dev.yaml`).** One API process serves HTTP *and* runs ingestion jobs in-process (in-memory queue), backed by an in-memory cache and an in-memory SSE bus. State is a SQLite file + local disk. Zero external services.
+- **Scaled (`config/scaled.yaml`).** API replicas + a separate arq worker, with Redis (cache + queue + SSE pub/sub) and Postgres (+ pgvector). Stateless API, horizontal on both tiers.
+
+| Service | Responsibility | Present in |
 |---|---|---|
-| **API** (FastAPI + Uvicorn) | Auth, CRUD, Q&A (retrieval + streaming generation), comparison orchestration, SSE, serving the htmx UI | Stateless; horizontal behind the proxy |
-| **Worker** (arq on Redis) | Ingestion pipeline stages, (re)analysis jobs — anything long-running or rate-limit-throttled | Horizontal; concurrency capped per provider to respect rate limits |
-| Postgres (+ pgvector) | Relational data + vector index | Managed instance / single node + backups |
-| Redis | Job queue, rate-limit counters, SSE pub/sub for job progress | Single node (no durable data beyond queue) |
-| Object storage | Original PDFs | S3/R2/MinIO |
+| **API** (FastAPI + Uvicorn) | Auth, CRUD, Q&A (retrieval + streaming generation), comparison orchestration, SSE, htmx UI. In single-process mode, also runs ingestion jobs inline via the in-process queue. | always |
+| **Worker** (arq) | Ingestion pipeline stages, (re)analysis jobs off the queue; concurrency capped per provider | **scaled only** |
+| Relational DB | Documents, chunks, analyses, conversations, usage | **SQLite** (default) → **Postgres (+ pgvector)** (scaled) |
+| Cache / Queue / Event bus | Rate-limit counters, job dispatch, SSE progress fan-out | **in-memory / in-process** (default) → **Redis** (scaled) |
+| Object storage | Original PDFs | **local disk** (default) → **S3/R2/MinIO** (scaled) |
 
-**Why Q&A runs in the API, not the worker:** Q&A is interactive (streamed first token < 5s); it performs one retrieval + one streamed LLM call. Ingestion/analysis is minutes-long and rate-limited, so it belongs on the queue. Comparison sits in between — it runs in the API when metrics are already extracted (fast path), and queues a job when re-extraction is needed.
+**Why Q&A runs in the API, not the worker:** Q&A is interactive (streamed first token < 5s); it performs one retrieval + one streamed LLM call. Ingestion/analysis is minutes-long and rate-limited, so it goes through the queue. Comparison sits in between — it runs in the API when metrics are already extracted (fast path), and queues a job when re-extraction is needed.
+
+**Single-process caveat:** with the `inprocess` queue there is no separate worker — ingestion runs as an in-process background task inside the API process. It shares the event loop with request handling, which is fine at low concurrency and is precisely the signal to switch the `queue`/`cache`/`events` backends to Redis (and split off a worker) as load grows. Because the queue is an interface, that switch is config-only.
 
 ### Code layout
 
 ```
 app/
   main.py               # FastAPI app factory
-  worker.py             # arq worker entrypoint
+  worker.py             # worker entrypoint (arq; scaled mode only)
   config/               # config.yaml loading, profiles, validation (pydantic-settings)
   providers/
     base.py             # LLMProvider / EmbeddingProvider / VectorStore protocols
     factory.py          # config → concrete adapters (built once at startup)
     llm/                # gemini.py, anthropic.py, openai.py, ollama.py
     embeddings/         # gemini.py, voyage.py, openai.py, local.py
-    vectorstores/       # pgvector.py, chroma.py, qdrant.py, faiss.py
+    vectorstores/       # chroma.py, pgvector.py, qdrant.py, faiss.py
+  infra/                # Cache / TaskQueue / EventBus interfaces + backends
+    cache.py            #   memory | redis
+    queue.py            #   inprocess | arq
+    events.py           #   inprocess | redis
   domain/               # pure logic: chunking, delta math, citation parsing, schemas
   services/             # ingestion.py, analysis.py, qa.py, comparison.py
   api/                  # routers, auth, SSE, rate limiting
-  db/                   # SQLAlchemy models, Alembic migrations
-  storage/              # object-storage client (s3 | local)
+  db/                   # SQLAlchemy models, Alembic migrations (sqlite | postgres)
+  storage/              # object-storage client (local | s3)
   ui/                   # Jinja2 + htmx templates
 tests/
   unit/                 # domain logic, citation parser, delta math
@@ -63,7 +74,7 @@ tests/
   evals/                # Q&A + extraction eval fixtures
 ```
 
-Dependency rule: `api`/`services` → `domain` + `providers/base`; only `providers/*` and `factory` import vendor SDKs. `domain` imports nothing above it and holds everything worth unit-testing heavily (chunker, citation validator, delta calculator).
+Dependency rule: `api`/`services` → `domain` + the `providers`/`infra` interfaces; only `providers/*`, `infra/*`, and the factory import vendor SDKs (Gemini, `redis`, `arq`, `boto3`, `psycopg`). `domain` imports nothing above it and holds everything worth unit-testing heavily (chunker, citation validator, delta calculator).
 
 ---
 
@@ -113,6 +124,34 @@ class VectorStore(Protocol):
 
 `index_meta` records `(embedding_provider, embedding_model, dimension)` for the index. At startup the factory compares config against `index_meta`: mismatch → hard error with a re-index command (`app reindex`), which re-embeds all chunks and swaps collections atomically. Vectors from different models are never mixed.
 
+### Infrastructure backends (same pattern as providers)
+
+Database, cache, queue, and the SSE event bus are configurable backends behind interfaces — core code depends on the protocol, never on `redis`/`arq`/`psycopg`. Each ships an in-memory/in-process default and a Redis (or Postgres, for the DB) implementation.
+
+```python
+class Cache(Protocol):                 # rate-limit counters, ephemeral values
+    async def get(self, key: str) -> str | None
+    async def set(self, key: str, value: str, ttl_s: int | None = None) -> None
+    async def incr(self, key: str, ttl_s: int) -> int   # atomic; used by rate limiting
+    async def delete(self, key: str) -> None
+
+class TaskQueue(Protocol):              # background jobs (ingestion/analysis)
+    async def enqueue(self, job: str, **kwargs: object) -> str
+
+class EventBus(Protocol):              # SSE progress fan-out
+    async def publish(self, channel: str, event: dict) -> None
+    def subscribe(self, channel: str) -> AsyncIterator[dict]
+```
+
+| Interface | Default backend | Scaled backend | Notes |
+|---|---|---|---|
+| Relational DB | SQLite (SQLAlchemy) | Postgres (+ pgvector) | Any SQLAlchemy URL; pgvector column exists only on Postgres (§5) |
+| `Cache` | in-memory TTL dict | Redis | Rate-limit `incr` is atomic in both; the in-memory one is per-process |
+| `TaskQueue` | `inprocess` (asyncio background task in the API) | `arq` (Redis) + worker | In-memory jobs die with the process — durability arrives with Redis |
+| `EventBus` | in-memory asyncio broadcast | Redis pub/sub | In-memory fan-out only reaches subscribers in the same process |
+
+**The in-memory backends are correct only single-process** — their state (queued jobs, rate counters, progress subscribers) lives in one process's memory. Selecting any Redis backend is what makes multiple API replicas + a separate worker coherent; the factory rejects a mixed config (e.g. `queue: arq` without a `url`) at startup.
+
 ---
 
 ## 4. Request Flows
@@ -147,7 +186,7 @@ sequenceDiagram
     A-->>U: SSE progress → "ready"
 ```
 
-Stages are checkpointed (`documents.stage`); a retry resumes from the failed stage, not from zero. Worker concurrency per provider is capped so free-tier rate limits produce slow ingestion, never failed ingestion.
+The diagram shows the scaled path. In single-process mode the queue is in-memory and these worker steps run as a background task inside the API process — same stages, same checkpoints. Stages are checkpointed (`documents.stage`); a retry resumes from the failed stage, not from zero. Worker concurrency per provider is capped so free-tier rate limits produce slow ingestion, never failed ingestion.
 
 ### 4.2 RAG Q&A (interactive, streamed)
 
@@ -177,7 +216,9 @@ Metrics loaded from `analyses` (queued re-extraction if missing) → deltas/grow
 
 ## 5. Data Architecture
 
-### Postgres schema (canonical)
+### Relational schema (canonical)
+
+Shown in Postgres types (the scaled target). On the **default SQLite** backend the ORM maps portable equivalents: `uuid[]` → JSON array, `jsonb` → JSON, `citext` → `TEXT COLLATE NOCASE`, and there is **no `vector(D)` column** — with SQLite the default vector store is Chroma, so vectors live there and `chunks.text` in the DB stays canonical. The `embedding` column below exists only when `vector_store.provider = pgvector`.
 
 ```sql
 users          (id uuid PK, email citext UNIQUE, password_hash, created_at,
@@ -258,8 +299,9 @@ Document text is untrusted input. Mitigations: system prompts instruct the model
 
 ### Topology
 
-- **Single-host (default):** Docker Compose — `proxy` (Caddy, auto-TLS), `api` (N replicas), `worker` (N replicas), `postgres` (pgvector image), `redis`, `minio` (or external S3). Suits the v1 scale comfortably.
-- **Scaled:** same images on any orchestrator (ECS/K8s); Postgres/Redis/storage move to managed services; API and worker scale independently (worker count is the ingestion-throughput knob, bounded by provider rate limits).
+- **Single-process (default):** one `api` container — SQLite + in-memory cache/queue/events + a local-disk volume — optionally behind Caddy. `docker compose up` (base `docker-compose.yml`), or just `make run` with no containers at all. No Postgres/Redis/object store.
+- **Scaled single-host:** base + `docker-compose.scaled.yml` (`make up-scaled`) layers on `postgres` (pgvector), `redis`, `minio`, and a separate `worker`, and points the app at `config/scaled.yaml`. Suits a small team on one box.
+- **Scaled orchestrated:** same images on any orchestrator (ECS/K8s); Postgres/Redis/storage move to managed services; API and worker scale independently (worker count is the ingestion-throughput knob, bounded by provider rate limits).
 
 ### Release & operations
 
@@ -275,10 +317,11 @@ Document text is untrusted input. Mitigations: system prompts instruct the model
 
 ### Environment profiles
 
-| | dev | prod | offline |
+| | dev (default) | scaled | offline |
 |---|---|---|---|
-| Run | `docker compose --profile dev` or bare `uvicorn` + SQLite/Chroma, in-process jobs | Compose/orchestrator, full topology | bare metal, Ollama + local embeddings |
-| Purpose | fast iteration, no external services required beyond a Gemini key | real deployments | air-gapped / private data |
+| Backends | SQLite + in-memory + local disk, single process | Postgres + Redis + S3, API replicas + worker | SQLite + in-memory, but Ollama + local embeddings |
+| Run | `make run`, or `make up` | `make up-scaled` / orchestrator | bare metal, no API keys |
+| Purpose | initial use; needs only a Gemini key (or none, with `offline`) | horizontal scaling | air-gapped / private data |
 
 ---
 
@@ -301,8 +344,9 @@ The `FakeLLMProvider` is a first-class adapter (selected via config like any oth
 | Decision | Choice | Trade-off accepted |
 |---|---|---|
 | Provider access | Hand-rolled protocol + adapters (LiteLLM optional inside the LLM adapter) | More code than LangChain/LiteLLM-everywhere; in exchange: no framework lock-in, debuggable, contract-testable |
-| Vector store (prod) | pgvector | One database to operate/back up; ceiling lower than dedicated stores — acceptable at library scale (≤ ~10⁶ chunks), interface allows swap |
+| Vector store | Chroma (default) → pgvector (scaled) | Chroma is zero-ops for single-process; pgvector keeps it to one database when on Postgres. Both behind the `VectorStore` interface — swap without touching core |
 | Citations | Prompt-based `[n]` markers + server-side validation | Slightly weaker than provider-native citation APIs; works on every provider incl. local models |
-| Jobs | arq (async, Redis) | Less ecosystem than Celery; async-native fits FastAPI, far less operational surface |
+| Jobs | in-process (default) → arq/Redis (scaled) | In-process jobs share the API loop and die with it — fine for initial use, and a config flip moves them to a durable Redis-backed worker |
+| Initial infra / process model | SQLite + in-memory, single process | Zero external services to start; the DB and cache/queue/event backends are interfaces, so Postgres + Redis is a config change, not a rewrite. Trade-off: in-memory state is per-process, so scaling *requires* selecting the Redis backends |
 | UI | Server-rendered Jinja2 + htmx | Less rich than a SPA; one deployable, SSE-friendly, easily replaced later |
 | Default LLM | Gemini 2.5 Flash free tier | Rate-limit throttled ingestion; zero cost by default, and the config system makes upgrading a one-line change |
