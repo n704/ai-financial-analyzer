@@ -8,11 +8,13 @@ these, never the ORM session directly.
 
 from __future__ import annotations
 
+from app.db.repositories.documents import DocumentRepository
 from app.db.repositories.index_meta import IndexMetaRepository
 from app.db.repositories.refresh_tokens import RefreshTokenRepository
 from app.db.repositories.users import UserAlreadyExists, UserRepository
 
 __all__ = [
+    "DocumentRepository",
     "IndexMetaRepository",
     "RefreshTokenRepository",
     "UserAlreadyExists",

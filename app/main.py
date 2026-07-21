@@ -2,12 +2,15 @@
 
 Wires config → DB engine/session factory → provider bundle (with the
 embedding-space guard) → infra bundle → object storage → auth, and exposes
-auth routes plus ``/healthz``/``/readyz``. Feature routers (documents, Q&A,
-compare) land from P2 onward — everything here is the seam they'll attach to.
+auth + document routes plus ``/healthz``/``/readyz``. On the default
+``inprocess`` queue backend, ingestion jobs (P2.1) are registered and run
+inline in this process; on ``arq``, the separate ``app.worker`` process runs
+them instead (same job body, ``app/services/jobs.py``).
 """
 
 from __future__ import annotations
 
+import functools
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,15 +22,17 @@ from fastapi import FastAPI
 from sqlalchemy.engine import make_url
 
 from app import __version__
-from app.api import ops
+from app.api import documents, ops
 from app.api.auth.router import router as auth_router
 from app.api.middleware import RateLimitMiddleware, RequestContextMiddleware
 from app.api.state import AppState
 from app.config import Settings, load_settings
 from app.db.base import build_engine, build_session_factory, session_scope
 from app.infra import build_infra
+from app.infra.queue import InProcessQueue
 from app.logging import configure_logging
 from app.providers import build_providers
+from app.services.jobs import INGEST_DOCUMENT_JOB, JobContext, run_ingest_document
 from app.storage import build_object_storage
 
 log = structlog.get_logger()
@@ -79,6 +84,13 @@ async def _build_app_state(settings: Settings) -> AppState:
     infra = await build_infra(settings)
     storage = build_object_storage(settings)
 
+    if isinstance(infra.queue, InProcessQueue):
+        # Single-process mode: ingestion runs inline in this process's event
+        # loop (ARCHITECTURE.md §2). On `queue.backend: arq`, `app.worker`
+        # registers the same job body instead — this process only enqueues.
+        job_ctx = JobContext(session_factory=session_factory, events=infra.events)
+        infra.queue.register(INGEST_DOCUMENT_JOB, functools.partial(run_ingest_document, job_ctx))
+
     return AppState(
         settings=settings,
         session_factory=session_factory,
@@ -113,6 +125,7 @@ def create_app() -> FastAPI:
 
     app.include_router(ops.router)
     app.include_router(auth_router)
+    app.include_router(documents.router)
 
     return app
 
