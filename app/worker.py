@@ -10,11 +10,11 @@ plus connection bootstrap.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import structlog
 from arq.connections import RedisSettings
-from arq.worker import func, run_worker
+from arq.worker import Function, func, run_worker
 
 from app.config import ConfigError, load_settings
 from app.db.base import build_engine, build_session_factory
@@ -64,7 +64,11 @@ class WorkerSettings:
     to know which backend is running it.
     """
 
-    functions = [func(_ingest_document, name=INGEST_DOCUMENT_JOB)]
+    # `WorkerSettings` is never instantiated — arq's CLI reads these as plain
+    # class attributes (see `arq.worker.get_kwargs`) — but ruff flags a bare
+    # list default as mutable-shared-state regardless, so it's spelled as a
+    # ClassVar to make that "namespace, not instances" intent explicit.
+    functions: ClassVar[list[Function]] = [func(_ingest_document, name=INGEST_DOCUMENT_JOB)]
     on_startup = _on_startup
     redis_settings = RedisSettings.from_dsn(_queue_url)
 

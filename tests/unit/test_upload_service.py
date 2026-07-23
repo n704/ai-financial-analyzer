@@ -147,14 +147,24 @@ async def test_upload_enforces_document_quota(
     limits = _limits(default_document_quota=1)
 
     await upload_document(
-        user=user, filename="a.pdf", data=_make_pdf(1), session=session,
-        storage=storage, queue=queue, limits=limits,
+        user=user,
+        filename="a.pdf",
+        data=_make_pdf(1),
+        session=session,
+        storage=storage,
+        queue=queue,
+        limits=limits,
     )
 
     with pytest.raises(QuotaExceeded):
         await upload_document(
-            user=user, filename="b.pdf", data=_make_pdf(1), session=session,
-            storage=storage, queue=queue, limits=limits,
+            user=user,
+            filename="b.pdf",
+            data=_make_pdf(1),
+            session=session,
+            storage=storage,
+            queue=queue,
+            limits=limits,
         )
 
 
@@ -168,8 +178,13 @@ async def test_upload_respects_per_user_quota_override(
 
     with pytest.raises(QuotaExceeded):
         await upload_document(
-            user=user, filename="a.pdf", data=_make_pdf(1), session=session,
-            storage=storage, queue=queue, limits=_limits(default_document_quota=100),
+            user=user,
+            filename="a.pdf",
+            data=_make_pdf(1),
+            session=session,
+            storage=storage,
+            queue=queue,
+            limits=_limits(default_document_quota=100),
         )
 
 

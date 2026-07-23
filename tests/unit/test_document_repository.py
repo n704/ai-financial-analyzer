@@ -32,7 +32,9 @@ def _user_id(session: Session) -> str:
 def test_create_and_get(session: Session) -> None:
     user_id = _user_id(session)
     repo = DocumentRepository(session)
-    doc = repo.create(user_id=user_id, filename="10k.pdf", storage_key=f"{user_id}/x.pdf", page_count=42)
+    doc = repo.create(
+        user_id=user_id, filename="10k.pdf", storage_key=f"{user_id}/x.pdf", page_count=42
+    )
     session.commit()
 
     fetched = repo.get(document_id=doc.id, user_id=user_id)

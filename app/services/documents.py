@@ -56,9 +56,7 @@ async def upload_document(
     documents = DocumentRepository(session)
 
     quota = (
-        user.quota_documents
-        if user.quota_documents is not None
-        else limits.default_document_quota
+        user.quota_documents if user.quota_documents is not None else limits.default_document_quota
     )
     if documents.count_for_user(user_id=user.id) >= quota:
         raise QuotaExceeded(quota)

@@ -47,7 +47,9 @@ def _auth_headers(client: TestClient, email: str) -> dict[str, str]:
 
 
 def test_upload_requires_auth(client: TestClient) -> None:
-    resp = client.post("/api/v1/documents", files={"file": ("a.pdf", _make_pdf(), "application/pdf")})
+    resp = client.post(
+        "/api/v1/documents", files={"file": ("a.pdf", _make_pdf(), "application/pdf")}
+    )
     assert resp.status_code == 401
 
 

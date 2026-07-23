@@ -78,6 +78,16 @@ files = ["app"]
 module = "app.domain.*"
 disallow_any_explicit = true
 
+# `disallow_any_explicit` flags pydantic's own `BaseModel` internals (its
+# `**data: Any` constructor, `ConfigDict`'s Any-typed keys, …) on every
+# subclass, regardless of the model's own annotations — a mypy/pydantic
+# friction point, not a real "explicit Any" in this module's own code. This
+# override — more specific than `app.domain.*` above, so it wins for this
+# one module — turns the flag back off just for the pydantic schemas.
+[[tool.mypy.overrides]]
+module = "app.domain.schemas"
+disallow_any_explicit = false
+
 # Vendor SDKs without bundled type stubs. Only adapter modules import these; core
 # code stays fully typed. Isolating the ignores here keeps that boundary honest.
 [[tool.mypy.overrides]]
