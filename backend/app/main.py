@@ -6,15 +6,24 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import config
+from . import config, quotes as quotes_service
 from .kronos_engine import ModelNotReady, engine
 from .market_data import INTERVALS, MarketDataError
 from .pipeline import DISCLAIMER, analyze
-from .schemas import AnalyzeRequest, AnalyzeResponse
+from .schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    Quote,
+    SymbolAdd,
+    WatchlistCreate,
+    WatchlistOut,
+    WatchlistRename,
+)
+from .storage import NotFound, StorageError, get_repository
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("kronos.api")
@@ -102,6 +111,84 @@ async def post_analyze(req: AnalyzeRequest):
     except Exception as exc:  # noqa: BLE001
         logger.exception("Analysis failed for %s", req.symbol)
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+
+
+# ------------------------------------------------------------------- quotes
+
+
+@app.get("/api/quotes", response_model=list[Quote])
+async def get_quotes(symbols: str = Query(..., description="Comma-separated tickers")):
+    """Price snapshots for watchlist rows. No model, one batched download."""
+    try:
+        wanted = quotes_service.parse_symbols(symbols)
+        return await asyncio.to_thread(quotes_service.fetch_quotes, wanted)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Quote fetch failed for %s", symbols)
+        raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
+
+
+# --------------------------------------------------------------- watchlists
+
+
+def _storage_error(exc: StorageError) -> HTTPException:
+    status = 404 if isinstance(exc, NotFound) else 400
+    return HTTPException(status_code=status, detail=str(exc))
+
+
+@app.get("/api/watchlists", response_model=list[WatchlistOut])
+async def list_watchlists():
+    return [WatchlistOut.of(w) for w in get_repository().list_watchlists()]
+
+
+@app.post("/api/watchlists", response_model=WatchlistOut, status_code=201)
+async def create_watchlist(req: WatchlistCreate):
+    try:
+        return WatchlistOut.of(get_repository().create_watchlist(req.name))
+    except StorageError as exc:
+        raise _storage_error(exc) from exc
+
+
+@app.get("/api/watchlists/{watchlist_id}", response_model=WatchlistOut)
+async def get_watchlist(watchlist_id: int):
+    try:
+        return WatchlistOut.of(get_repository().get_watchlist(watchlist_id))
+    except StorageError as exc:
+        raise _storage_error(exc) from exc
+
+
+@app.patch("/api/watchlists/{watchlist_id}", response_model=WatchlistOut)
+async def rename_watchlist(watchlist_id: int, req: WatchlistRename):
+    try:
+        return WatchlistOut.of(get_repository().rename_watchlist(watchlist_id, req.name))
+    except StorageError as exc:
+        raise _storage_error(exc) from exc
+
+
+@app.delete("/api/watchlists/{watchlist_id}", status_code=204)
+async def delete_watchlist(watchlist_id: int):
+    try:
+        get_repository().delete_watchlist(watchlist_id)
+    except StorageError as exc:
+        raise _storage_error(exc) from exc
+
+
+@app.post("/api/watchlists/{watchlist_id}/symbols", response_model=WatchlistOut)
+async def add_symbol(watchlist_id: int, req: SymbolAdd):
+    """Idempotent: adding a symbol already on the list is a no-op, not a 409."""
+    try:
+        return WatchlistOut.of(get_repository().add_symbol(watchlist_id, req.symbol, req.note))
+    except StorageError as exc:
+        raise _storage_error(exc) from exc
+
+
+@app.delete("/api/watchlists/{watchlist_id}/symbols/{symbol}", response_model=WatchlistOut)
+async def remove_symbol(watchlist_id: int, symbol: str):
+    try:
+        return WatchlistOut.of(get_repository().remove_symbol(watchlist_id, symbol))
+    except StorageError as exc:
+        raise _storage_error(exc) from exc
 
 
 # Serve the built frontend when it exists (`npm run build` in ./frontend).

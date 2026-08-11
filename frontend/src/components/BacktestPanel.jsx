@@ -3,9 +3,10 @@ import { LineStyle } from 'lightweight-charts'
 import { addLine, createBaseChart } from '../charts'
 import { useThemeVersion } from '../hooks/useThemeVersion'
 import { toUnix, fmtNum } from '../utils'
+import InfoTip from './InfoTip'
 
 /** Scores the model on bars it did not see: forecast vs what actually happened. */
-export default function BacktestPanel({ backtest, intraday }) {
+export default function BacktestPanel({ backtest, intraday, children }) {
   const holder = useRef(null)
   const themeVersion = useThemeVersion()
 
@@ -41,19 +42,27 @@ export default function BacktestPanel({ backtest, intraday }) {
       </div>
       <div className="stats" style={{ marginBottom: 14 }}>
         <div className="stat">
-          <div className="k">Mean abs. error</div>
+          <div className="k">
+            Mean abs. error <InfoTip term="mape" label="mean absolute error" />
+          </div>
           <div className={`v ${beat ? 'pos' : 'neg'}`}>{fmtNum(backtest.mape_pct)}%</div>
         </div>
         <div className="stat">
-          <div className="k">Baseline (no change)</div>
+          <div className="k">
+            Baseline (no change) <InfoTip term="naive_baseline" label="the no-change baseline" />
+          </div>
           <div className="v muted">{fmtNum(backtest.naive_mape_pct)}%</div>
         </div>
         <div className="stat">
-          <div className="k">Bar direction hits</div>
+          <div className="k">
+            Bar direction hits <InfoTip term="directional_hit" label="bar direction hits" />
+          </div>
           <div className="v">{fmtNum(backtest.directional_hit_rate_pct, 0)}%</div>
         </div>
         <div className="stat">
-          <div className="k">p10–p90 coverage</div>
+          <div className="k">
+            p10–p90 coverage <InfoTip term="band_coverage" label="band coverage" />
+          </div>
           <div className="v">{fmtNum(backtest.band_coverage_pct, 0)}%</div>
         </div>
         <div className="stat">
@@ -69,6 +78,7 @@ export default function BacktestPanel({ backtest, intraday }) {
         <span><i className="swatch median" />Forecast median</span>
         <span><i className="swatch bound dashed" />p10 / p90</span>
       </div>
+      {children}
     </div>
   )
 }

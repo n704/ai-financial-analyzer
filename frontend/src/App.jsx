@@ -4,12 +4,16 @@ import Tabs from './components/Tabs'
 import ThemeToggle from './components/ThemeToggle'
 import { useHashRoute } from './hooks/useHashRoute'
 import AnalyzeView from './views/AnalyzeView'
+import WatchlistView from './views/WatchlistView'
 
 /**
- * Views registered here appear in the tab bar. Later PRs add watchlist and
- * compare; the bar hides itself while there is only one.
+ * Views registered here appear in the tab bar. A later PR adds compare; the
+ * bar hides itself while there is only one.
  */
-const VIEWS = [{ id: 'analyze', label: 'Analyze', icon: '📈' }]
+const VIEWS = [
+  { id: 'analyze', label: 'Analyze', icon: '📈' },
+  { id: 'watchlist', label: 'Watchlist', icon: '⭐' },
+]
 
 function ModelStatus({ health }) {
   const state = health?.state ?? 'connecting'
@@ -91,6 +95,7 @@ export default function App() {
         {active === 'analyze' && (
           <AnalyzeView config={config} symbol={params.symbol} onSymbolChange={setSymbol} />
         )}
+        {active === 'watchlist' && <WatchlistView onAnalyze={setSymbol} />}
       </div>
     </div>
   )

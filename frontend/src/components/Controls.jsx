@@ -1,3 +1,5 @@
+import AddToWatchlist from './AddToWatchlist'
+
 const EXAMPLES = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'SPY', 'BTC-USD', 'RELIANCE.NS']
 
 export default function Controls({ form, setForm, onSubmit, busy, config }) {
@@ -21,16 +23,19 @@ export default function Controls({ form, setForm, onSubmit, busy, config }) {
       <div className="controls">
         <div className="field">
           <label htmlFor="symbol">Ticker</label>
-          <input
-            id="symbol"
-            className="symbol"
-            value={form.symbol}
-            onChange={set('symbol')}
-            placeholder="AAPL"
-            autoComplete="off"
-            spellCheck="false"
-            required
-          />
+          <div className="symbol-row">
+            <input
+              id="symbol"
+              className="symbol"
+              value={form.symbol}
+              onChange={set('symbol')}
+              placeholder="AAPL"
+              autoComplete="off"
+              spellCheck="false"
+              required
+            />
+            <AddToWatchlist symbol={form.symbol} />
+          </div>
         </div>
 
         <div className="field">

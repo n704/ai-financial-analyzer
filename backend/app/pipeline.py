@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from . import analysis
+from . import analysis, narrative
 from .kronos_engine import engine
 from .market_data import INTERVALS, MarketDataError, fetch_ohlcv, future_timestamps
 from .schemas import AnalyzeRequest
@@ -70,7 +70,7 @@ def analyze(req: AnalyzeRequest) -> dict:
         backtest = analysis.holdout_evaluation(bt_context, bt_paths, actual)
         timings["backtest"] = int((time.time() - t0) * 1000)
 
-    return {
+    result = {
         "symbol": md.symbol,
         "meta": md.meta,
         "interval": req.interval,
@@ -100,3 +100,6 @@ def analyze(req: AnalyzeRequest) -> dict:
         "timings_ms": timings,
         "disclaimer": DISCLAIMER,
     }
+    # Prose read off the numbers above, so it can never contradict the charts.
+    result["explanations"] = narrative.explain(result)
+    return result

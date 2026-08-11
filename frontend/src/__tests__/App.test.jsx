@@ -1,10 +1,18 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../api', () => ({
   getConfig: vi.fn(),
   getHealth: vi.fn(),
   analyze: vi.fn(),
+  listWatchlists: vi.fn(),
+  createWatchlist: vi.fn(),
+  renameWatchlist: vi.fn(),
+  deleteWatchlist: vi.fn(),
+  addSymbol: vi.fn(),
+  removeSymbol: vi.fn(),
+  getQuotes: vi.fn(),
 }))
 
 const api = await import('../api')
@@ -24,6 +32,8 @@ beforeEach(() => {
   api.getHealth.mockResolvedValue({
     model: { state: 'ready', model: 'small', params: '24.7M', device: 'mps', load_seconds: 3.2 },
   })
+  api.listWatchlists.mockResolvedValue([])
+  api.getQuotes.mockResolvedValue([])
 })
 
 describe('App shell', () => {
@@ -61,10 +71,29 @@ describe('App shell', () => {
     await waitFor(() => expect(screen.getByLabelText('Ticker')).toHaveValue('NVDA'))
   })
 
-  it('hides the tab bar while only one view is registered', async () => {
+  it('offers a tab per registered view', async () => {
     render(<App />)
     await screen.findByLabelText('Ticker')
-    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Analyze/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Watchlist/ })).toBeInTheDocument()
+  })
+
+  it('switches views and records the choice in the URL', async () => {
+    render(<App />)
+    await userEvent.click(await screen.findByRole('tab', { name: /Watchlist/ }))
+    expect(window.location.hash).toBe('#/watchlist')
+    expect(screen.queryByLabelText('Ticker')).not.toBeInTheDocument()
+  })
+
+  it('opens straight into the view named in the URL', async () => {
+    window.location.hash = '#/watchlist'
+    render(<App />)
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Watchlist/ })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    )
   })
 
   it('offers the theme toggle', async () => {

@@ -34,5 +34,64 @@ class AnalyzeResponse(BaseModel):
     stats: dict[str, Any]
     backtest: dict[str, Any] | None
     diagnostics: dict[str, Any]
+    explanations: dict[str, Any] = Field(default_factory=dict)
     timings_ms: dict[str, int]
     disclaimer: str
+
+
+# ---------------------------------------------------------------- watchlists
+
+
+class WatchlistItemOut(BaseModel):
+    symbol: str
+    note: str | None = None
+    added_at: str | None = None
+
+
+class WatchlistOut(BaseModel):
+    id: int
+    name: str
+    created_at: str | None = None
+    items: list[WatchlistItemOut] = Field(default_factory=list)
+
+    @classmethod
+    def of(cls, watchlist) -> "WatchlistOut":
+        """Map a `storage.Watchlist` dataclass onto the wire format."""
+        return cls(
+            id=watchlist.id,
+            name=watchlist.name,
+            created_at=watchlist.created_at.isoformat() if watchlist.created_at else None,
+            items=[
+                WatchlistItemOut(
+                    symbol=i.symbol,
+                    note=i.note,
+                    added_at=i.added_at.isoformat() if i.added_at else None,
+                )
+                for i in watchlist.items
+            ],
+        )
+
+
+class WatchlistCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, examples=["Tech"])
+
+
+class WatchlistRename(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+
+
+class SymbolAdd(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=24, examples=["NVDA"])
+    note: str | None = Field(None, max_length=280)
+
+
+class Quote(BaseModel):
+    symbol: str
+    name: str
+    currency: str | None = None
+    sector: str | None = None
+    price: float | None = None
+    previous_close: float | None = None
+    change_pct: float | None = None
+    as_of: str | None = None
+    error: str | None = None

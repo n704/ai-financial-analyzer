@@ -8,6 +8,7 @@ import {
 import { addLine, createBaseChart } from '../charts'
 import { useThemeVersion } from '../hooks/useThemeVersion'
 import { toUnix } from '../utils'
+import InfoTip from './InfoTip'
 
 /** Candlestick history + Monte-Carlo forecast fan from Kronos. */
 export default function PriceChart({ result, height = 420 }) {
@@ -105,9 +106,18 @@ export default function PriceChart({ result, height = 420 }) {
     <>
       <div className="chart" ref={holder} />
       <div className="legend">
-        <span><i className="swatch median" />Median forecast (p50)</span>
-        <span><i className="swatch bound dashed" />p10 / p90 band</span>
-        <span><i className="swatch path" />Sampled Kronos paths</span>
+        <span>
+          <i className="swatch median" />Median forecast (p50)
+          <InfoTip term="median_path" label="the median forecast" />
+        </span>
+        <span>
+          <i className="swatch bound dashed" />p10 / p90 band
+          <InfoTip term="p10_p90" label="the p10 to p90 band" />
+        </span>
+        <span>
+          <i className="swatch path" />Sampled Kronos paths
+          <InfoTip term="sampled_paths" label="the sampled paths" />
+        </span>
       </div>
     </>
   )
