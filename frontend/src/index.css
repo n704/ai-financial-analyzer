@@ -86,6 +86,27 @@ button, input, select {
   color: inherit;
 }
 
+/* Visible keyboard focus everywhere. The default ring disappears against the
+   dark panels, so it is drawn explicitly in the accent colour. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Respect a reduced-motion preference: the spinner and the status-dot pulse
+   are decoration, and vestibular triggers are not worth a loading hint. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .spinner { border-top-color: var(--accent); opacity: 0.8; }
+  .dot.loading { opacity: 1; }
+}
+
 .app {
   max-width: 1360px;
   margin: 0 auto;
@@ -167,9 +188,41 @@ button, input, select {
 /* ---------- controls ---------- */
 .controls {
   display: grid;
-  grid-template-columns: minmax(150px, 1.2fr) repeat(5, minmax(90px, 1fr)) auto;
+  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) auto;
   gap: 12px;
   align-items: end;
+}
+
+/* Everything past ticker + interval lives behind the Advanced disclosure:
+   seven knobs in one row asked a first-time reader to have an opinion about
+   top-p before they had seen a single chart. */
+.advanced {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.field.checkbox { justify-content: end; }
+
+.field.checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 12px;
+}
+
+.examples-symbols {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .field {
@@ -629,6 +682,43 @@ button, input, select {
   .grid.main { grid-template-columns: minmax(0, 1fr); }
   .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .controls .btn { grid-column: 1 / -1; width: 100%; }
+}
+
+@media (max-width: 640px) {
+  .app { padding: 16px 12px 48px; }
+  .controls { grid-template-columns: minmax(0, 1fr); }
+  .header { gap: 10px; }
+  .header-actions { width: 100%; justify-content: space-between; }
+  .brand { flex-wrap: wrap; }
+  .brand h1 { font-size: 18px; }
+  .tabs { overflow-x: auto; }
+  .tab { padding: 9px 10px; }
+  .panel { padding: 12px; }
+  .examples-symbols { margin-left: 0; }
+  .price-now .p { font-size: 22px; }
+}
+
+/* ---------- loading overlay ---------- */
+.results { position: relative; }
+
+.results.stale > *:not(.results-overlay) {
+  opacity: 0.35;
+  pointer-events: none;
+  filter: saturate(0.6);
+}
+
+.results-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  align-content: start;
+  padding-top: 120px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* ---------- signal ---------- */

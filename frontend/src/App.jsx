@@ -92,7 +92,12 @@ export default function App() {
 
       <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
         {active === 'analyze' && (
-          <AnalyzeView config={config} symbol={params.symbol} onSymbolChange={setSymbol} />
+          <AnalyzeView
+            config={config}
+            symbol={params.symbol}
+            onSymbolChange={setSymbol}
+            modelState={health?.state ?? 'connecting'}
+          />
         )}
         {active === 'watchlist' && <WatchlistView onAnalyze={setSymbol} />}
         {active === 'compare' && (
