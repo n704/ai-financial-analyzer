@@ -41,6 +41,11 @@ export const analyze = (payload) => post('/api/analyze', payload)
 export const getQuotes = (symbols) =>
   symbols.length ? request(`/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`) : []
 
+export const compare = (symbols, interval = '1d', bars = 180) =>
+  post('/api/compare', { symbols, interval, bars })
+
+export const compareForecast = (payload) => post('/api/compare/forecast', payload)
+
 export const listWatchlists = () => request('/api/watchlists')
 export const createWatchlist = (name) => post('/api/watchlists', { name })
 export const renameWatchlist = (id, name) => patch(`/api/watchlists/${id}`, { name })
