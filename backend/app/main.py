@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import comparison, config, quotes as quotes_service
+from . import comparison, config, quotes as quotes_service, sectors
 from .kronos_engine import ModelNotReady, engine
 from .market_data import INTERVALS, MarketDataError
 from .pipeline import DISCLAIMER, analyze
@@ -172,6 +172,25 @@ async def post_compare_forecast(req: CompareForecastRequest):
         "stats": full["stats"],
         "diagnostics": full["diagnostics"],
     }
+
+
+# ------------------------------------------------------------------- sector
+
+
+@app.get("/api/sector/{symbol}")
+async def get_sector(symbol: str, interval: str = "1d", bars: int = 180):
+    """One stock against its sector ETF and the broad market. No model."""
+    if not 32 <= bars <= 1000:
+        raise HTTPException(status_code=422, detail="bars must be between 32 and 1000.")
+    try:
+        result = await asyncio.to_thread(sectors.sector_comparison, symbol, interval, bars)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Sector comparison failed for %s", symbol)
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+    result["explanations"] = sectors.explain_sector(result)
+    return result
 
 
 # ------------------------------------------------------------------- quotes

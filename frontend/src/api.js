@@ -46,6 +46,9 @@ export const compare = (symbols, interval = '1d', bars = 180) =>
 
 export const compareForecast = (payload) => post('/api/compare/forecast', payload)
 
+export const getSector = (symbol, interval = '1d', bars = 180) =>
+  request(`/api/sector/${encodeURIComponent(symbol)}?interval=${interval}&bars=${bars}`)
+
 export const listWatchlists = () => request('/api/watchlists')
 export const createWatchlist = (name) => post('/api/watchlists', { name })
 export const renameWatchlist = (id, name) => patch(`/api/watchlists/${id}`, { name })
