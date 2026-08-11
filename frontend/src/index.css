@@ -1,15 +1,66 @@
+/*
+ * Palette is defined once per theme as custom properties. Everything else in
+ * this file — and `chartTheme.js`, which reads these into the chart canvases —
+ * refers to the tokens, never to a literal colour.
+ *
+ * Light is the bare :root default so a token always has a value; dark is
+ * applied under `prefers-color-scheme` for "match system" and again under
+ * [data-theme="dark"] so an explicit choice wins in both directions.
+ */
 :root {
+  --bg: #f6f8fc;
+  --panel: #ffffff;
+  --panel-2: #eef2f9;
+  --line: #d8e0ec;
+  --grid: #e8eef7;
+  --text: #101725;
+  --muted: #5a6b85;
+  --accent: #2563eb;
+  --pos: #0f8a7e;
+  --neg: #d43f3c;
+  --warn: #b7791f;
+  --chart-bound: #7a8dab;
+  --error-text: #8f1f1d;
+  --notice-text: #7c5310;
+  --radius: 12px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #0b0f17;
+    --panel: #131924;
+    --panel-2: #182031;
+    --line: #253044;
+    --grid: #1c2434;
+    --text: #e6edf7;
+    --muted: #8b9bb4;
+    --accent: #4c8dff;
+    --pos: #26a69a;
+    --neg: #ef5350;
+    --warn: #f0b429;
+    --chart-bound: #7a8dab;
+    --error-text: #ffc9c7;
+    --notice-text: #ffe1a6;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
   --bg: #0b0f17;
   --panel: #131924;
   --panel-2: #182031;
   --line: #253044;
+  --grid: #1c2434;
   --text: #e6edf7;
   --muted: #8b9bb4;
   --accent: #4c8dff;
   --pos: #26a69a;
   --neg: #ef5350;
   --warn: #f0b429;
-  --radius: 12px;
+  --chart-bound: #7a8dab;
+  --error-text: #ffc9c7;
+  --notice-text: #ffe1a6;
   color-scheme: dark;
 }
 
@@ -65,6 +116,12 @@ button, input, select {
 .brand span {
   color: var(--muted);
   font-size: 13px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .model-status {
@@ -152,6 +209,9 @@ button, input, select {
 
 .btn {
   background: var(--accent);
+  /* Fixed white rather than var(--text): the accent stays dark in both
+     themes, so an inherited text colour would go unreadable in light mode. */
+  color: #fff;
   border: none;
   border-radius: 8px;
   padding: 10px 22px;
@@ -178,6 +238,42 @@ button, input, select {
 .btn.ghost.active {
   border-color: var(--accent);
   color: var(--text);
+}
+
+.btn.icon {
+  padding: 6px 10px;
+  line-height: 1;
+  font-size: 15px;
+}
+
+/* ---------- tabs ---------- */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: -1px;
+}
+
+.tab:hover { color: var(--text); }
+
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
 }
 
 .examples {
@@ -368,13 +464,20 @@ button, input, select {
   margin-right: 6px;
 }
 
+/* Legend keys mirror the series colours in chartTheme.js. */
+.swatch.median { border-top-color: var(--accent); }
+.swatch.bound { border-top-color: var(--chart-bound); }
+.swatch.actual { border-top-color: var(--text); }
+.swatch.path { border-top-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.swatch.dashed { border-top-style: dashed; }
+
 .chart { width: 100%; }
 
 /* ---------- misc ---------- */
 .error {
   background: color-mix(in srgb, var(--neg) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--neg) 45%, transparent);
-  color: #ffc9c7;
+  color: var(--error-text);
   border-radius: var(--radius);
   padding: 12px 16px;
   margin-top: 16px;
@@ -384,7 +487,7 @@ button, input, select {
 .notice {
   background: color-mix(in srgb, var(--warn) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
-  color: #ffe1a6;
+  color: var(--notice-text);
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 12.5px;
