@@ -1,4 +1,4 @@
-# Kronos Stock Evaluator
+# AI Financial Analyzer
 
 A full-stack app that evaluates a stock with [**Kronos**](https://github.com/shiyu-coder/Kronos) — the
 first open-source foundation model for financial candlesticks (AAAI 2026,
@@ -18,6 +18,8 @@ Ticker ─▶ yfinance OHLCV ─▶ Kronos tokenizer ─▶ Kronos transformer �
 ## Quick start
 
 ```bash
+git clone https://github.com/n704/ai-financial-analyzer.git
+cd ai-financial-analyzer
 ./setup.sh     # clone Kronos, create .venv (Python 3.10+), install deps, build UI
 ./run.sh       # http://127.0.0.1:8000
 ```
