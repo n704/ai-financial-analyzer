@@ -1,11 +1,14 @@
 """Market data access: fetch OHLCV history and build future bar timestamps."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import time as dtime
 
 import pandas as pd
 import yfinance as yf
+
+from . import config
+from .cache import TTLCache
 
 
 class MarketDataError(RuntimeError):
@@ -35,6 +38,18 @@ INTERVALS: dict[str, IntervalSpec] = {
 
 REQUIRED_COLS = ["open", "high", "low", "close", "volume"]
 
+# Bars are cached for less than one bar's worth of time, so a cached response is
+# never staler than the bar it describes. Metadata (name, sector, currency)
+# barely changes and comes from yfinance's slowest endpoint, so it holds longer.
+_ohlcv_cache: TTLCache = TTLCache(ttl=config.OHLCV_CACHE_TTL_DAILY, max_entries=256)
+_meta_cache: TTLCache = TTLCache(ttl=config.META_CACHE_TTL, max_entries=512)
+
+
+def clear_caches() -> None:
+    """Drop every cached fetch. Used by tests and after config changes."""
+    _ohlcv_cache.clear()
+    _meta_cache.clear()
+
 
 @dataclass
 class MarketData:
@@ -58,13 +73,29 @@ def _download_period(interval: str, bars: int) -> str:
 
 
 def fetch_ohlcv(symbol: str, interval: str, bars: int) -> MarketData:
-    """Download the most recent `bars` bars of OHLCV data for `symbol`."""
+    """Download the most recent `bars` bars of OHLCV data for `symbol`.
+
+    Results are cached briefly — see `_ohlcv_cache`. The returned frame is
+    always a copy, so a caller that mutates it cannot poison the cache.
+    """
     symbol = symbol.strip().upper()
     if not symbol:
         raise MarketDataError("Symbol is required.")
     if interval not in INTERVALS:
         raise MarketDataError(f"Unsupported interval '{interval}'.")
 
+    ttl = (
+        config.OHLCV_CACHE_TTL_INTRADAY
+        if INTERVALS[interval].intraday
+        else config.OHLCV_CACHE_TTL_DAILY
+    )
+    md = _ohlcv_cache.get_or_set(
+        (symbol, interval, bars), lambda: _download_ohlcv(symbol, interval, bars), ttl=ttl
+    )
+    return replace(md, df=md.df.copy(), meta=dict(md.meta))
+
+
+def _download_ohlcv(symbol: str, interval: str, bars: int) -> MarketData:
     ticker = yf.Ticker(symbol)
     raw = ticker.history(
         period=_download_period(interval, bars),
@@ -94,8 +125,19 @@ def fetch_ohlcv(symbol: str, interval: str, bars: int) -> MarketData:
 
 
 def _safe_meta(ticker: "yf.Ticker", symbol: str) -> dict:
-    """Best-effort descriptive metadata; never fatal to a forecast."""
-    out = {"symbol": symbol, "name": symbol, "currency": None, "exchange": None}
+    """Best-effort descriptive metadata; never fatal to a forecast.
+
+    `ticker.info` is yfinance's slowest endpoint and this is called once per
+    symbol per comparison, so results are cached for an hour — company names
+    and sectors do not move.
+    """
+    return dict(
+        _meta_cache.get_or_set(symbol, lambda: _download_meta(ticker, symbol))
+    )
+
+
+def _download_meta(ticker: "yf.Ticker", symbol: str) -> dict:
+    out = {"symbol": symbol, "name": symbol, "currency": None, "exchange": None, "sector": None}
     try:
         info = ticker.fast_info
         out["currency"] = getattr(info, "currency", None)

@@ -6,6 +6,9 @@ __pycache__/
 node_modules/
 frontend/dist/
 
+# SQLite watchlist database and anything else the app writes at runtime
+data/
+
 # Upstream Kronos checkout — recreated by ./setup.sh
 vendor/
 

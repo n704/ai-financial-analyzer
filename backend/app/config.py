@@ -8,6 +8,8 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent
 KRONOS_REPO = PROJECT_ROOT / "vendor" / "Kronos"
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+# Everything the app writes lives here; gitignored, created on first use.
+DATA_DIR = PROJECT_ROOT / "data"
 
 # Model zoo published by the Kronos authors on the Hugging Face Hub.
 MODEL_PRESETS: dict[str, dict] = {
@@ -50,3 +52,18 @@ LOOKBACK_WARN_ABOVE = 200
 MAX_LOOKBACK = 512
 MAX_PRED_LEN = 120
 MAX_PATHS = 64
+
+# ------------------------------------------------------------------ storage
+# Which `storage.WatchlistRepository` implementation to build. Only "sqlite"
+# ships today; the indirection exists so another database can replace it
+# without touching any caller.
+WATCHLIST_BACKEND = os.getenv("WATCHLIST_BACKEND", "sqlite")
+WATCHLIST_DB = os.getenv("WATCHLIST_DB") or str(DATA_DIR / "watchlists.db")
+
+# -------------------------------------------------------------- market data
+# Comparison, sector and watchlist views fan out over many symbols, so repeated
+# yfinance calls dominate latency without a cache. Bars change at most once per
+# interval; names and sectors change essentially never.
+OHLCV_CACHE_TTL_INTRADAY = float(os.getenv("OHLCV_CACHE_TTL_INTRADAY", "60"))
+OHLCV_CACHE_TTL_DAILY = float(os.getenv("OHLCV_CACHE_TTL_DAILY", "300"))
+META_CACHE_TTL = float(os.getenv("META_CACHE_TTL", "3600"))
