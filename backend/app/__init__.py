@@ -1,0 +1,1 @@
+"""Kronos stock evaluation backend."""

@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+node_modules/
+frontend/dist/
+
+# Upstream Kronos checkout — recreated by ./setup.sh
+vendor/
+
+.DS_Store
