@@ -1,4 +1,5 @@
 import { fmtMoney, fmtPct, signalTone } from '../utils'
+import InfoTip from './InfoTip'
 
 export default function SignalCard({ result }) {
   const { signal, stats, meta, params, interval_label } = result
@@ -29,7 +30,9 @@ export default function SignalCard({ result }) {
           <div className="v">{fmtMoney(stats.last_close, currency)}</div>
         </div>
         <div className="stat">
-          <div className="k">Median target</div>
+          <div className="k">
+            Median target <InfoTip term="median_path" label="the median target" />
+          </div>
           <div className={`v ${stats.median_return_pct >= 0 ? 'pos' : 'neg'}`}>
             {fmtMoney(stats.median_close, currency)}
           </div>
@@ -41,7 +44,9 @@ export default function SignalCard({ result }) {
           </div>
         </div>
         <div className="stat">
-          <div className="k">P(up)</div>
+          <div className="k">
+            P(up) <InfoTip term="prob_up" label="P(up)" />
+          </div>
           <div className="v">{Math.round(stats.prob_up * 100)}%</div>
         </div>
       </div>

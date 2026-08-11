@@ -4,6 +4,7 @@ import Controls from '../components/Controls'
 import PriceChart from '../components/PriceChart'
 import SignalCard from '../components/SignalCard'
 import BacktestPanel from '../components/BacktestPanel'
+import ExplainPanel from '../components/ExplainPanel'
 import { RiskPanel, TechnicalsPanel } from '../components/RiskPanel'
 import { fmtDate, fmtMoney, fmtPct } from '../utils'
 
@@ -104,6 +105,7 @@ export default function AnalyzeView({ config, symbol, onSymbolChange }) {
                   </div>
                 </div>
                 <PriceChart result={result} />
+                <ExplainPanel paragraphs={result.explanations?.forecast} />
               </div>
 
               {result.diagnostics.caveats.length > 0 && (
@@ -119,7 +121,12 @@ export default function AnalyzeView({ config, symbol, onSymbolChange }) {
                 </div>
               )}
 
-              <BacktestPanel backtest={result.backtest} intraday={intraday} />
+              <BacktestPanel backtest={result.backtest} intraday={intraday}>
+                <ExplainPanel
+                  paragraphs={result.explanations?.backtest}
+                  title="What the hold-out chart is telling you"
+                />
+              </BacktestPanel>
             </div>
 
             <div className="stack">

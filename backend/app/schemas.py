@@ -34,6 +34,7 @@ class AnalyzeResponse(BaseModel):
     stats: dict[str, Any]
     backtest: dict[str, Any] | None
     diagnostics: dict[str, Any]
+    explanations: dict[str, Any] = Field(default_factory=dict)
     timings_ms: dict[str, int]
     disclaimer: str
 
