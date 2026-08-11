@@ -1,8 +1,12 @@
 import { fmtMoney, fmtNum, fmtPct } from '../utils'
+import InfoTip from './InfoTip'
 
-const Row = ({ k, v, tone }) => (
+const Row = ({ k, v, tone, term }) => (
   <div className="row">
-    <span className="k">{k}</span>
+    <span className="k">
+      {k}
+      {term && <InfoTip term={term} label={k.toLowerCase()} />}
+    </span>
     <span className={`v ${tone ?? ''}`}>{v}</span>
   </div>
 )
@@ -12,14 +16,14 @@ export function RiskPanel({ stats, currency }) {
     <div className="panel">
       <div className="panel-title">Distribution & risk</div>
       <div className="rows">
-        <Row k="Outcome range (p10–p90)" v={`${fmtMoney(stats.close_p10, currency)} – ${fmtMoney(stats.close_p90, currency)}`} />
-        <Row k="Return range (p10–p90)" v={`${fmtPct(stats.return_p10_pct)} … ${fmtPct(stats.return_p90_pct)}`} />
-        <Row k="Path dispersion (1σ)" v={`${fmtNum(stats.dispersion_pct)}%`} />
-        <Row k="Conviction (μ/σ)" v={fmtNum(stats.conviction)} tone={stats.conviction >= 0 ? 'pos' : 'neg'} />
-        <Row k="Value at risk (5%)" v={fmtPct(stats.value_at_risk_5pct)} tone="neg" />
-        <Row k="Expected shortfall (5%)" v={fmtPct(stats.expected_shortfall_5pct)} tone="neg" />
-        <Row k="Max drawdown of median path" v={fmtPct(stats.max_drawdown_pct)} tone="neg" />
-        <Row k="Forecast volatility (ann.)" v={`${fmtNum(stats.forecast_vol_annual * 100, 1)}%`} />
+        <Row k="Outcome range (p10–p90)" term="p10_p90" v={`${fmtMoney(stats.close_p10, currency)} – ${fmtMoney(stats.close_p90, currency)}`} />
+        <Row k="Return range (p10–p90)" term="p10_p90" v={`${fmtPct(stats.return_p10_pct)} … ${fmtPct(stats.return_p90_pct)}`} />
+        <Row k="Path dispersion (1σ)" term="dispersion" v={`${fmtNum(stats.dispersion_pct)}%`} />
+        <Row k="Conviction (μ/σ)" term="conviction" v={fmtNum(stats.conviction)} tone={stats.conviction >= 0 ? 'pos' : 'neg'} />
+        <Row k="Value at risk (5%)" term="var_5" v={fmtPct(stats.value_at_risk_5pct)} tone="neg" />
+        <Row k="Expected shortfall (5%)" term="expected_shortfall" v={fmtPct(stats.expected_shortfall_5pct)} tone="neg" />
+        <Row k="Max drawdown of median path" term="max_drawdown" v={fmtPct(stats.max_drawdown_pct)} tone="neg" />
+        <Row k="Forecast volatility (ann.)" term="forecast_vol" v={`${fmtNum(stats.forecast_vol_annual * 100, 1)}%`} />
         <Row k="Paths simulated" v={stats.n_paths} />
       </div>
     </div>
@@ -33,10 +37,10 @@ export function TechnicalsPanel({ technicals: t, currency }) {
       <div className="panel-title">Price context</div>
       <div className="rows">
         <Row k="Last close" v={fmtMoney(t.last_close, currency)} />
-        <Row k="SMA 20 / 50" v={`${fmtMoney(t.sma_20, currency)} / ${fmtMoney(t.sma_50, currency)}`} />
+        <Row k="SMA 20 / 50" term="sma" v={`${fmtMoney(t.sma_20, currency)} / ${fmtMoney(t.sma_50, currency)}`} />
         <Row k="SMA 200" v={fmtMoney(t.sma_200, currency)} />
-        <Row k="RSI (14)" v={fmtNum(t.rsi_14, 1)} tone={rsiTone} />
-        <Row k="Realized vol (ann.)" v={t.realized_vol_annual == null ? '—' : `${fmtNum(t.realized_vol_annual * 100, 1)}%`} />
+        <Row k="RSI (14)" term="rsi" v={fmtNum(t.rsi_14, 1)} tone={rsiTone} />
+        <Row k="Realized vol (ann.)" term="realized_vol" v={t.realized_vol_annual == null ? '—' : `${fmtNum(t.realized_vol_annual * 100, 1)}%`} />
         <Row k="Period high / low" v={`${fmtMoney(t.period_high, currency)} / ${fmtMoney(t.period_low, currency)}`} />
         <Row k="From high / low" v={`${fmtPct(t.pct_from_high, 1)} / ${fmtPct(t.pct_from_low, 1)}`} />
       </div>
