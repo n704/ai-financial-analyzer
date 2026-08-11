@@ -22,12 +22,29 @@ async function request(path, options) {
   return body
 }
 
+const json = (method) => (path, body) =>
+  request(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+
+const post = json('POST')
+const patch = json('PATCH')
+const del = (path) => request(path, { method: 'DELETE' })
+
 export const getConfig = () => request('/api/config')
 export const getHealth = () => request('/api/health')
 
-export const analyze = (payload) =>
-  request('/api/analyze', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
+export const analyze = (payload) => post('/api/analyze', payload)
+
+export const getQuotes = (symbols) =>
+  symbols.length ? request(`/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`) : []
+
+export const listWatchlists = () => request('/api/watchlists')
+export const createWatchlist = (name) => post('/api/watchlists', { name })
+export const renameWatchlist = (id, name) => patch(`/api/watchlists/${id}`, { name })
+export const deleteWatchlist = (id) => del(`/api/watchlists/${id}`)
+export const addSymbol = (id, symbol, note) => post(`/api/watchlists/${id}/symbols`, { symbol, note })
+export const removeSymbol = (id, symbol) =>
+  del(`/api/watchlists/${id}/symbols/${encodeURIComponent(symbol)}`)

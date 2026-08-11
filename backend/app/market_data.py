@@ -51,6 +51,21 @@ def clear_caches() -> None:
     _meta_cache.clear()
 
 
+def cached_meta(symbol: str) -> dict | None:
+    """Metadata for `symbol` if some earlier request already fetched it.
+
+    Never triggers a download: callers that render many symbols at once (the
+    watchlist) would otherwise pay for `ticker.info` per row.
+    """
+    return _meta_cache.get(symbol.strip().upper())
+
+
+def warm_meta(symbol: str) -> dict:
+    """Fetch and cache metadata for `symbol`. Slow — call off the request path."""
+    symbol = symbol.strip().upper()
+    return _safe_meta(yf.Ticker(symbol), symbol)
+
+
 @dataclass
 class MarketData:
     symbol: str
