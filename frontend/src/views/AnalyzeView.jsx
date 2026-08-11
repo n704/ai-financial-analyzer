@@ -6,6 +6,7 @@ import SignalCard from '../components/SignalCard'
 import BacktestPanel from '../components/BacktestPanel'
 import ExplainPanel from '../components/ExplainPanel'
 import { RiskPanel, TechnicalsPanel } from '../components/RiskPanel'
+import SectorPanel from '../components/SectorPanel'
 import { fmtDate, fmtMoney, fmtPct } from '../utils'
 
 const DEFAULT_FORM = {
@@ -127,6 +128,10 @@ export default function AnalyzeView({ config, symbol, onSymbolChange }) {
                   title="What the hold-out chart is telling you"
                 />
               </BacktestPanel>
+
+              {/* Keyed on the analysed symbol so it refetches on a new run,
+                  not on every parameter tweak. */}
+              <SectorPanel symbol={result.symbol} interval={result.interval} />
             </div>
 
             <div className="stack">
