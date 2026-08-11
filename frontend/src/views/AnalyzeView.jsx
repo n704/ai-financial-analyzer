@@ -22,7 +22,7 @@ const DEFAULT_FORM = {
 }
 
 /** Single-symbol Kronos evaluation: forecast, signal, risk and hold-out score. */
-export default function AnalyzeView({ config, symbol, onSymbolChange }) {
+export default function AnalyzeView({ config, symbol, onSymbolChange, modelState }) {
   const [form, setForm] = useState(() => ({ ...DEFAULT_FORM, symbol: symbol || DEFAULT_FORM.symbol }))
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
@@ -60,9 +60,20 @@ export default function AnalyzeView({ config, symbol, onSymbolChange }) {
 
   return (
     <>
-      <Controls form={form} setForm={setForm} onSubmit={run} busy={busy} config={config} />
+      <Controls
+        form={form}
+        setForm={setForm}
+        onSubmit={run}
+        busy={busy}
+        config={config}
+        modelState={modelState}
+      />
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
 
       {busy && !result && (
         <div className="panel" style={{ marginTop: 16 }}>
@@ -73,8 +84,30 @@ export default function AnalyzeView({ config, symbol, onSymbolChange }) {
         </div>
       )}
 
+      {!busy && !result && !error && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="empty">
+            <p>Pick a ticker and hit Evaluate.</p>
+            <p className="muted">
+              You will get a probabilistic forecast, a signal, a risk profile, and a hold-out score
+              that says whether the model beat doing nothing on that symbol&apos;s recent bars.
+            </p>
+          </div>
+        </div>
+      )}
+
       {result && (
         <>
+          {/* A re-run keeps the previous result mounted and dims it, rather
+              than blanking the page — otherwise the screen jumps and the
+              reader loses their place on every parameter tweak. */}
+          <div className={`results ${busy ? 'stale' : ''}`} aria-busy={busy}>
+            {busy && (
+              <div className="results-overlay" role="status">
+                <div className="spinner" />
+                <div>Re-running {form.symbol.toUpperCase()}…</div>
+              </div>
+            )}
           <div className="grid main">
             <div className="stack">
               <div className="panel">
@@ -139,6 +172,7 @@ export default function AnalyzeView({ config, symbol, onSymbolChange }) {
               <RiskPanel stats={result.stats} currency={result.meta.currency} />
               <TechnicalsPanel technicals={result.technicals} currency={result.meta.currency} />
             </div>
+          </div>
           </div>
 
           <p className="disclaimer">{result.disclaimer}</p>

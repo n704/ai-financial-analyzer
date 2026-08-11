@@ -6,7 +6,15 @@ first open-source foundation model for financial candlesticks (AAAI 2026,
 a BUY/HOLD/SELL call, a risk profile, and — importantly — a hold-out score that tells you whether the
 model actually beat a do-nothing baseline on that symbol's recent bars.
 
-- **Backend** — Python / FastAPI, Kronos (PyTorch) inference, Yahoo Finance data
+Three screens:
+
+- **Analyze** — the forecast fan, signal, risk profile, hold-out check and a sector comparison, each
+  chart accompanied by a plain-English reading of what it actually shows.
+- **Watchlist** — persistent symbol lists with price snapshots, stored server-side.
+- **Compare** — 2–6 symbols on one rebased axis with return, volatility, drawdown, beta and a
+  correlation matrix; Kronos forecasts are opt-in and run one symbol at a time.
+
+- **Backend** — Python / FastAPI, Kronos (PyTorch) inference, Yahoo Finance data, SQLite
 - **Frontend** — React + Vite, TradingView `lightweight-charts`
 
 ```
@@ -95,6 +103,13 @@ on higher-frequency K-lines; treat daily equity forecasts as exploratory.
 | `GET /api/health` | Model state (`idle`/`loading`/`ready`/`error`), device, params |
 | `GET /api/config` | Intervals, model presets, defaults, limits |
 | `POST /api/analyze` | Full evaluation for one symbol |
+| `POST /api/compare` | Price and risk comparison of 2–6 symbols — no model, sub-second |
+| `POST /api/compare/forecast` | Kronos signal for one symbol, for the compare view's opt-in column |
+| `GET /api/sector/{symbol}` | Stock vs its sector ETF vs SPY |
+| `GET /api/quotes?symbols=A,B` | Batched price snapshots for watchlist rows |
+| `GET`/`POST` `/api/watchlists` | List / create watchlists |
+| `PATCH`/`DELETE` `/api/watchlists/{id}` | Rename / delete |
+| `POST`/`DELETE` `/api/watchlists/{id}/symbols[/{symbol}]` | Add / remove a symbol |
 
 ```bash
 curl -X POST localhost:8000/api/analyze -H 'Content-Type: application/json' \
@@ -113,7 +128,14 @@ curl -X POST localhost:8000/api/analyze -H 'Content-Type: application/json' \
 | `backtest` | `true` | Run the hold-out check (roughly doubles runtime) |
 
 The response carries `history`, `forecast.band`, `forecast.sample_paths`, `signal`, `stats`,
-`technicals`, `backtest`, and `diagnostics.caveats`.
+`technicals`, `backtest`, `diagnostics.caveats`, and `explanations` — plain-English readings of both
+charts, generated from the same numbers the charts are drawn from.
+
+```bash
+curl -s -X POST localhost:8000/api/compare -H 'Content-Type: application/json' \
+  -d '{"symbols":["AAPL","MSFT","BTC-USD"],"interval":"1d","bars":180}' | jq '.symbols[].metrics'
+curl -s localhost:8000/api/sector/XOM | jq '{sector,sector_etf,relative}'
+```
 
 ## Configuration
 
@@ -124,6 +146,10 @@ The response carries `history`, `forecast.band`, `forecast.sample_paths`, `signa
 | `KRONOS_PRELOAD` | `1` | Load weights at startup instead of first request |
 | `HF_TOKEN` | unset | Only needed for private mirrors — see note below |
 | `PORT` | `8000` | API port |
+| `WATCHLIST_BACKEND` | `sqlite` | Which storage implementation to build |
+| `WATCHLIST_DB` | `data/watchlists.db` | SQLite file for watchlists |
+| `OHLCV_CACHE_TTL_DAILY` | `300` | Seconds to cache daily bars (`_INTRADAY` defaults to `60`) |
+| `META_CACHE_TTL` | `3600` | Seconds to cache names, currencies and sectors |
 
 > **Hugging Face auth note.** The Kronos repos are public, so the app downloads anonymously
 > (`token=False`) unless `HF_TOKEN` is set. This is deliberate: a stale token in
@@ -133,13 +159,16 @@ The response carries `history`, `forecast.band`, `forecast.sample_paths`, `signa
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest backend/tests -q                                  # 15 tests, no network
+.venv/bin/python -m pytest backend/tests -q                                  # 180 tests, no network
+cd frontend && npm test                                                      # 193 tests, jsdom
 cd vendor/Kronos && PYTHONPATH=. ../../.venv/bin/python -m pytest tests/ -q  # upstream regression
 ```
 
 The backend suite covers exchange vs. 24/7 calendar generation, intraday session grids, signal
-thresholds, OHLC ordering of forecast candles, JSON-safety on degenerate paths, hold-out scoring, and
-the diagnostic caveats.
+thresholds, OHLC ordering of forecast candles, JSON-safety on degenerate paths, hold-out scoring, the
+diagnostic caveats, watchlist persistence and thread-safety, market-data caching, cross-timezone
+alignment in comparisons, beta/alpha arithmetic, sector mapping, and every HTTP route. The frontend
+suite covers routing, theming, chart wiring, and each view's loading, empty and error states.
 
 ## Layout
 
@@ -148,11 +177,20 @@ backend/app/
   main.py           FastAPI routes, static hosting, background model load
   pipeline.py       data → forecast → evaluation orchestration
   kronos_engine.py  thread-safe model wrapper, Monte-Carlo path sampling
-  market_data.py    yfinance access, future-bar calendars
+  market_data.py    yfinance access, future-bar calendars, TTL caching
   analysis.py       bands, statistics, signal, hold-out scoring, caveats
+  narrative.py      plain-English readings of the charts, from the same numbers
+  comparison.py     multi-symbol alignment, relative performance, correlation
+  sectors.py        sector → SPDR ETF mapping, beta/alpha against the sector
+  quotes.py         batched price snapshots for watchlist rows
+  cache.py          thread-safe TTL cache
+  storage/          watchlist persistence behind a swappable repository Protocol
 frontend/src/
-  App.jsx           layout and state
-  components/       Controls, PriceChart, SignalCard, RiskPanel, BacktestPanel
+  App.jsx           shell: header, tabs, view switch
+  views/            AnalyzeView, WatchlistView, CompareView
+  components/       Controls, charts, panels, tooltips, tables
+  charts.js         one configured lightweight-charts instance, themed + sized
+  chartTheme.js     chart palette resolved from the CSS custom properties
 vendor/Kronos/      upstream checkout (cloned by setup.sh)
 ```
 
