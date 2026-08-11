@@ -14,12 +14,10 @@ from backend.app import market_data, quotes  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _clean():
-    quotes.clear_cache()
-    market_data.clear_caches()
+def _settle_background():
+    """Let any pool work finish before the next test resets shared state."""
     yield
-    quotes.clear_cache()
-    market_data.clear_caches()
+    _settle(lambda: not quotes._warming)
 
 
 def _frame(symbol="AAPL"):
@@ -63,19 +61,22 @@ def test_metadata_is_warmed_in_the_background(monkeypatch):
 
 
 def test_a_symbol_is_only_warmed_once_while_in_flight(monkeypatch):
-    monkeypatch.setattr(quotes.yf, "download", lambda **kw: _frame())
+    # A symbol used by no other test, so a stray background thread elsewhere
+    # cannot warm it first and make this look like a pass with zero calls.
+    symbol = "WARMONCE"
+    monkeypatch.setattr(quotes.yf, "download", lambda **kw: _frame(symbol))
     calls = []
 
-    def slow_warm(symbol):
-        calls.append(symbol)
+    def slow_warm(s):
+        calls.append(s)
         time.sleep(0.05)
-        return {"name": "Apple Inc."}
+        return {"name": "Warm Once Inc."}
 
     monkeypatch.setattr(quotes, "warm_meta", slow_warm)
 
     for _ in range(5):
         quotes.clear_cache()
-        quotes.fetch_quotes(["AAPL"])
+        quotes.fetch_quotes([symbol])
     assert _settle(lambda: not quotes._warming)
     assert len(calls) == 1
 

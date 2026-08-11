@@ -85,6 +85,27 @@ class SymbolAdd(BaseModel):
     note: str | None = Field(None, max_length=280)
 
 
+# ---------------------------------------------------------------- comparison
+
+
+class CompareRequest(BaseModel):
+    symbols: list[str] = Field(..., min_length=2, max_length=6, examples=[["AAPL", "MSFT"]])
+    interval: str = Field("1d", examples=["1d", "1h", "30m", "15m"])
+    bars: int = Field(180, ge=32, le=1000, description="Bars of shared history to compare over.")
+
+
+class CompareForecastRequest(BaseModel):
+    """One symbol per request: inference is lock-serialised, so batching a set
+    of symbols would just make the client wait in silence for all of them."""
+
+    symbol: str = Field(..., min_length=1, max_length=24)
+    interval: str = Field("1d")
+    lookback: int = Field(config.DEFAULT_LOOKBACK, ge=64, le=config.MAX_LOOKBACK)
+    horizon: int = Field(10, ge=1, le=config.MAX_PRED_LEN)
+    paths: int = Field(24, ge=1, le=config.MAX_PATHS)
+    seed: int | None = Field(None, ge=0, le=2**31 - 1)
+
+
 class Quote(BaseModel):
     symbol: str
     name: str

@@ -10,13 +10,15 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import config, quotes as quotes_service
+from . import comparison, config, quotes as quotes_service, sectors
 from .kronos_engine import ModelNotReady, engine
 from .market_data import INTERVALS, MarketDataError
 from .pipeline import DISCLAIMER, analyze
 from .schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
+    CompareForecastRequest,
+    CompareRequest,
     Quote,
     SymbolAdd,
     WatchlistCreate,
@@ -111,6 +113,84 @@ async def post_analyze(req: AnalyzeRequest):
     except Exception as exc:  # noqa: BLE001
         logger.exception("Analysis failed for %s", req.symbol)
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+
+
+# --------------------------------------------------------------- comparison
+
+
+@app.post("/api/compare")
+async def post_compare(req: CompareRequest):
+    """Price and risk comparison. No model, so this returns immediately."""
+    try:
+        result = await asyncio.to_thread(
+            comparison.compare_symbols, req.symbols, req.interval, req.bars
+        )
+    except MarketDataError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Comparison failed for %s", req.symbols)
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+    result["explanations"] = comparison.explain_comparison(result)
+    return result
+
+
+@app.post("/api/compare/forecast")
+async def post_compare_forecast(req: CompareForecastRequest):
+    """Kronos signal for a single symbol, for the compare view's opt-in column.
+
+    Skips the hold-out backtest — it roughly doubles runtime, and the compare
+    table only shows the signal.
+    """
+    if req.lookback > engine.preset["max_context"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"lookback {req.lookback} exceeds the model context window "
+            f"({engine.preset['max_context']} bars).",
+        )
+    analyze_req = AnalyzeRequest(
+        symbol=req.symbol,
+        interval=req.interval,
+        lookback=req.lookback,
+        horizon=req.horizon,
+        paths=req.paths,
+        seed=req.seed,
+        backtest=False,
+    )
+    try:
+        full = await asyncio.to_thread(analyze, analyze_req)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ModelNotReady as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Compare forecast failed for %s", req.symbol)
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+
+    return {
+        "symbol": full["symbol"],
+        "signal": full["signal"],
+        "stats": full["stats"],
+        "diagnostics": full["diagnostics"],
+    }
+
+
+# ------------------------------------------------------------------- sector
+
+
+@app.get("/api/sector/{symbol}")
+async def get_sector(symbol: str, interval: str = "1d", bars: int = 180):
+    """One stock against its sector ETF and the broad market. No model."""
+    if not 32 <= bars <= 1000:
+        raise HTTPException(status_code=422, detail="bars must be between 32 and 1000.")
+    try:
+        result = await asyncio.to_thread(sectors.sector_comparison, symbol, interval, bars)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Sector comparison failed for %s", symbol)
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+    result["explanations"] = sectors.explain_sector(result)
+    return result
 
 
 # ------------------------------------------------------------------- quotes

@@ -4,15 +4,14 @@ import Tabs from './components/Tabs'
 import ThemeToggle from './components/ThemeToggle'
 import { useHashRoute } from './hooks/useHashRoute'
 import AnalyzeView from './views/AnalyzeView'
+import CompareView from './views/CompareView'
 import WatchlistView from './views/WatchlistView'
 
-/**
- * Views registered here appear in the tab bar. A later PR adds compare; the
- * bar hides itself while there is only one.
- */
+/** Views registered here appear in the tab bar. */
 const VIEWS = [
   { id: 'analyze', label: 'Analyze', icon: '📈' },
   { id: 'watchlist', label: 'Watchlist', icon: '⭐' },
+  { id: 'compare', label: 'Compare', icon: '⚖️' },
 ]
 
 function ModelStatus({ health }) {
@@ -93,9 +92,21 @@ export default function App() {
 
       <div role="tabpanel" id={`panel-${active}`} aria-labelledby={`tab-${active}`}>
         {active === 'analyze' && (
-          <AnalyzeView config={config} symbol={params.symbol} onSymbolChange={setSymbol} />
+          <AnalyzeView
+            config={config}
+            symbol={params.symbol}
+            onSymbolChange={setSymbol}
+            modelState={health?.state ?? 'connecting'}
+          />
         )}
         {active === 'watchlist' && <WatchlistView onAnalyze={setSymbol} />}
+        {active === 'compare' && (
+          <CompareView
+            config={config}
+            symbols={params.symbols}
+            onNavigate={(symbols) => navigate('compare', { symbols })}
+          />
+        )}
       </div>
     </div>
   )
