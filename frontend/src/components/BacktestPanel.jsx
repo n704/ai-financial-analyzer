@@ -1,43 +1,29 @@
 import { useEffect, useRef } from 'react'
-import { createChart, LineSeries, LineStyle, ColorType } from 'lightweight-charts'
+import { LineStyle } from 'lightweight-charts'
+import { addLine, createBaseChart } from '../charts'
+import { useThemeVersion } from '../hooks/useThemeVersion'
 import { toUnix, fmtNum } from '../utils'
 
 /** Scores the model on bars it did not see: forecast vs what actually happened. */
 export default function BacktestPanel({ backtest, intraday }) {
   const holder = useRef(null)
+  const themeVersion = useThemeVersion()
 
   useEffect(() => {
     if (!holder.current || !backtest) return
-    const chart = createChart(holder.current, {
-      height: 200,
-      layout: {
-        background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: '#8b9bb4',
-        attributionLogo: false,
-      },
-      grid: { vertLines: { color: '#1c2434' }, horzLines: { color: '#1c2434' } },
-      rightPriceScale: { borderColor: '#253044' },
-      timeScale: { borderColor: '#253044', timeVisible: intraday, secondsVisible: false },
-    })
+    const { chart, colors, dispose } = createBaseChart(holder.current, { height: 200, intraday })
 
-    const add = (key, options) => {
-      const s = chart.addSeries(LineSeries, { lineWidth: 2, priceLineVisible: false, ...options })
-      s.setData(backtest.series.map((p) => ({ time: toUnix(p.time), value: p[key] })))
-    }
-    add('p90', { color: '#7a8dab', lineWidth: 1, lineStyle: LineStyle.Dashed, lastValueVisible: false })
-    add('p10', { color: '#7a8dab', lineWidth: 1, lineStyle: LineStyle.Dashed, lastValueVisible: false })
-    add('predicted', { color: '#4c8dff' })
-    add('actual', { color: '#e6edf7' })
+    const series = (key, options) =>
+      addLine(chart, backtest.series.map((p) => ({ time: toUnix(p.time), value: p[key] })), options)
+
+    series('p90', { color: colors.bound, lineWidth: 1, lineStyle: LineStyle.Dashed })
+    series('p10', { color: colors.bound, lineWidth: 1, lineStyle: LineStyle.Dashed })
+    series('predicted', { color: colors.median, lastValueVisible: true })
+    series('actual', { color: colors.actual, lastValueVisible: true })
     chart.timeScale().fitContent()
 
-    const ro = new ResizeObserver(() => chart.applyOptions({ width: holder.current.clientWidth }))
-    ro.observe(holder.current)
-    chart.applyOptions({ width: holder.current.clientWidth })
-    return () => {
-      ro.disconnect()
-      chart.remove()
-    }
-  }, [backtest, intraday])
+    return dispose
+  }, [backtest, intraday, themeVersion])
 
   if (!backtest) return null
 
@@ -79,9 +65,9 @@ export default function BacktestPanel({ backtest, intraday }) {
       </div>
       <div className="chart" ref={holder} />
       <div className="legend">
-        <span><i style={{ borderColor: '#e6edf7' }} />Actual</span>
-        <span><i style={{ borderColor: '#4c8dff' }} />Forecast median</span>
-        <span><i style={{ borderColor: '#7a8dab', borderTopStyle: 'dashed' }} />p10 / p90</span>
+        <span><i className="swatch actual" />Actual</span>
+        <span><i className="swatch median" />Forecast median</span>
+        <span><i className="swatch bound dashed" />p10 / p90</span>
       </div>
     </div>
   )
