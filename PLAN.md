@@ -1,6 +1,6 @@
 # AI Financial Analyzer — Implementation Plan
 
-Build plan for the system in [SPEC.md](SPEC.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Organized as five phases (P1–P5) matching the spec milestones, broken into concrete tasks with dependencies and exit criteria. Each phase ends in something demoable.
+Build plan for the system in [SPEC.md](SPEC.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Organized as six phases (P1–P6) matching the spec milestones, broken into concrete tasks with dependencies and exit criteria. Each phase ends in something demoable.
 
 **Sequencing principle:** build the seams first (config → providers → storage), then the vertical slice (ingest → analyze), then the interactive features (Q&A → compare), then harden. Every phase keeps the free Gemini default working end-to-end.
 
@@ -155,6 +155,40 @@ Prove the abstraction, then make it operable.
 
 ---
 
+## P6 — Market forecasting (1.5 weeks)
+
+Adds the F6 flow (SPEC §3.6). Built in the same order as P1 — interfaces, fakes, and baselines first, the real model last — so nothing downstream ever depends on torch being installed.
+
+### Seams → P1.1–P1.3
+- **P6.1** `providers/base.py` additions — `MarketDataProvider` / `ForecastProvider` protocols, shared types (`Bar`, `PriceSeries`, `ForecastResult`), typed errors (`TickerNotFound`, `MarketDataUnavailable`, `ForecastUnavailable`). New `market_data` + `forecast` config blocks with boot-time validation: extra importable when enabled, weights-license ack, `max_context`/`max_horizon` within the adapter's limits.
+  *Done when:* protocols type-check with zero vendor imports; each of the three invalid configs fails at startup with a distinct, readable message.
+- **P6.2** `providers/marketdata/` — `fixture.py` (hermetic, CI) + one live adapter (`stooq`): normalize vendor bars to `PriceSeries`, split/dividend-adjusted closes, `as_of` stamping, backoff. Global `price_series` cache table + repository — the one repository deliberately *not* user-scoped (ARCHITECTURE §5).
+  *Done when:* fixture adapter serves CI with no network; the live adapter passes the same contract suite; a repeat fetch inside the TTL hits the cache instead of the vendor.
+
+### Domain math (pure, heavily unit-tested) → P6.1
+- **P6.3** `domain/forecast.py` — transforms (`level|log|log_return`) and their inverses; naive baselines (last-value/drift, seasonal-naive); rolling-origin backtest; MASE, sMAPE, pinball loss, interval coverage; skill verdict; empirical bands from backtest residuals.
+  *Done when:* transforms round-trip to float tolerance; every metric matches a hand-computed fixture; flat/trending/noisy series produce the expected baseline scores; clean under the strict `app.domain.*` mypy overrides.
+- **P6.4** `providers/forecast/naive.py` + `fake.py` — the baselines exposed *as* a `ForecastProvider`, so `forecast.provider: naive` is a fully working configuration with zero extra dependencies.
+  *Done when:* the entire F6 flow runs end-to-end with torch not installed.
+
+### TimesFM adapter → P6.1, P6.3
+- **P6.5** `providers/forecast/timesfm.py` — `TimesFM_2p5_200M_torch.from_pretrained(model, revision)` + `compile(ForecastConfig(max_context, max_horizon, normalize_inputs, use_continuous_quantile_head, fix_quantile_crossing, ...))`, device selection, batched `forecast(horizon, inputs)` → `ForecastResult`, model held resident, checkpoint pinned by revision. Adds the `forecast` extra (`timesfm[torch]`) to `pyproject.toml`, the `timesfm.*`/`torch.*` mypy `ignore_missing_imports` entries, and the license-guard table.
+  *Done when:* passes the same `ForecastProvider` contract suite as the naive adapter, unchanged; 3.0 weights refuse to load without `weights_license_ack: true`; swapping `naive` → `timesfm` touches no code outside config.
+
+### Service, API, UI → P6.2–P6.5
+- **P6.6** `services/forecasting.py` + queued job — ticker resolution from `documents.ticker`, quota and horizon checks, `input_hash` dedupe, price fetch, transform, **inference off the event loop** (thread executor in-process, arq worker when scaled), backtest, persist, SSE progress. Endpoints `POST /forecasts`, `GET /forecasts`, `GET /forecasts/{id}`, `DELETE /forecasts/{id}`.
+  *Done when:* a forecast completes end-to-end on both queue backends; a repeat request against an unchanged `as_of` returns the stored artifact without re-running inference; the cross-tenant denial test covers every forecast endpoint.
+- **P6.7** `POST /forecasts/{id}/narrate` — streamed narrative over the computed table plus retrieved chunks from the linked report; guardrails (descriptive only, no advice, the model emits no numbers of its own); `forecast:{id}` citation form kept out of the page-citation space.
+  *Done when:* the narrative streams and attributes the forecast artifact; a "tell me whether to buy" prompt is refused, not answered.
+- **P6.8** Forecast UI — chart with median path + 10–90% band, backtest scorecard, skill-verdict badge, provenance line, disclaimer. The band and the scorecard are not optional render paths; there is no code path that draws the line alone.
+  *Done when:* a report with a detected ticker renders a forecast in the browser, and a "no better than naive" result is visibly labeled as such.
+- **P6.9** Forecast eval (`tests/evals/forecast/`) — fixture series with known continuations; scores the configured provider against the baselines; asserts metric correctness and guards relative-skill regression.
+  *Done when:* the eval runs in CI on `naive` (hermetic) and on demand with `timesfm`.
+
+**Exit (spec P6):** a ticker on a stored report yields a banded forecast with a backtest scorecard and an honest skill verdict; `forecast.provider` swaps between `naive` and `timesfm` with no code change; the forecast eval is green in CI.
+
+---
+
 ## Timeline & critical path
 
 ```mermaid
@@ -170,11 +204,14 @@ gantt
     section Features
     P4 comparison       :7, 8
     P5 hardening        :8, 10
+    P6 forecasting      :10, 12
 ```
 
-**~10 weeks** for one engineer building sequentially; faster with parallelism (UI vs pipeline in P2; second adapter vs ops in P5).
+**~10 weeks** to v1 (P1–P5) for one engineer building sequentially, plus **~1.5 weeks** for P6; faster with parallelism (UI vs pipeline in P2; second adapter vs ops in P5; P6 alongside P4/P5 entirely).
 
 **Critical path:** P1.1 config → P1.2/1.3 provider seam → P1.5 Gemini adapter → P2.5–2.7 ingestion stages → P3.2 retriever → P4.1 deltas. Everything else (UI, storage, auth, observability) can proceed alongside once the seam exists.
+
+**P6 is off the critical path by construction:** it depends only on the P1 provider/config seam and on `documents.ticker` from P2.5, so a second engineer can build it in parallel with P4 and P5. It touches no existing flow — no shared prompts, no shared retrieval, no schema changes to existing tables.
 
 **Parallelizable early:** auth (P1.12–13), object storage (P1.11), infra backends (P1.10), and DB (P1.8) have no dependency on the provider adapters and can be built in parallel with P1.5–1.7.
 
@@ -191,6 +228,11 @@ gantt
 | Embedding config change corrupts index | Mixed vector spaces → silent bad retrieval | `index_meta` startup guard + explicit `reindex` (P1.9/P5.2) |
 | SQLite single-writer / in-memory state under load | Write contention; state lost on restart | Fine at initial single-process scale; the config-only switch to Postgres + Redis (scaled profile) removes it — portable types mean no schema rewrite |
 | Model hallucinates citations/numbers | Untrustworthy output | Marker validation (P3.1), nullable-metrics + `source_page` (P2.4), Python-computed deltas (P4.1) |
+| **Forecast skill on equity closes is near zero** | The most impressive-looking feature is the least trustworthy; users read a curve as a prediction | Treat it as a measurement problem, not a modeling one: mandatory bands + rolling-origin backtest + explicit skill verdict (P6.3/P6.8). "No better than naive" is a first-class, visible outcome. Prices are near-random-walk — a foundation model does not change that, and the UI must not imply otherwise |
+| torch + a 200M checkpoint bloat image, memory, cold start | Slower deploys, ~1 GB RSS, multi-second first forecast | `forecast.enabled: false` by default; `timesfm[torch]` is an extra, not a dependency; checkpoint cached on a volume; model loaded once at startup, never per job (P6.5/P6.6) |
+| TimesFM 3.0 weights are non-commercial / non-production | License violation in a real deployment | Default to 2.5 (Apache-2.0); deny-by-default license guard at startup, unknown checkpoints treated as restricted (P6.1/P6.5) |
+| Market-data vendors rate-limit, drift, or are unofficial | Forecasts can't fetch inputs | `MarketDataProvider` interface + `fixture` adapter keeps CI hermetic; cached `price_series`; typed `MarketDataUnavailable` degrades to "forecast unavailable", never a 500 (P6.2) |
+| Inference blocks the API event loop | Every concurrent request stalls for seconds | Forecasts always go through `TaskQueue` — thread executor in-process, arq worker when scaled; asserted in P6.6's done-when |
 
 ---
 
@@ -201,3 +243,4 @@ gantt
 - Multi-user isolation verified by per-endpoint cross-tenant denial tests.
 - Observability, quotas, backups+restore drill, and p95 targets in place.
 - CI green: lint, typecheck, unit, integration, eval set.
+- Forecasting runs end-to-end on the `naive` provider with zero extra dependencies, and switching to TimesFM is config-only — and every forecast ships with its band, its backtest scorecard, and an honest skill verdict.

@@ -13,14 +13,16 @@ flowchart LR
     API --> PG[(Postgres\n+ pgvector)]
     API --> RD[(Redis\nqueue + rate limits)]
     API --> S3[(Object storage\nS3 / MinIO)]
-    RD --> W[Worker service\ningestion + analysis jobs]
+    RD --> W[Worker service\ningestion + analysis + forecast jobs]
     W --> PG
     W --> S3
     W --> EXT[Model providers\nGemini default / Anthropic / OpenAI / Ollama]
+    W --> MD[Market data source\nEOD bars - stooq / vendor]
+    W --> TFM[TimesFM checkpoint\nlocal torch inference]
     API --> EXT
 ```
 
-Trust boundaries: everything left of `EXT` runs inside the deployment; model providers are external and receive document content (except in the `offline` profile, where Ollama + local embeddings keep all data on-machine).
+Trust boundaries: everything left of `EXT` runs inside the deployment; model providers are external and receive document content (except in the `offline` profile, where Ollama + local embeddings keep all data on-machine). Two forecasting-specific notes: the market-data source is external but receives only a **ticker symbol** — never document or user content — and `TFM` is *not* an external service: TimesFM weights are downloaded once and run in-process, so price series never leave the deployment.
 
 > The diagram shows the **scaled** topology. The **default is single-process**: one API process holds the SQLite database (via a file), an in-memory cache/queue/event bus, and local-disk PDF storage — no Postgres, Redis, or object store. Postgres/Redis/worker appear only when the `scaled` profile selects those backends (see §2, §7).
 
@@ -36,10 +38,12 @@ The app has **two run modes**, chosen entirely by config (`database`, `cache`, `
 | Service | Responsibility | Present in |
 |---|---|---|
 | **API** (FastAPI + Uvicorn) | Auth, CRUD, Q&A (retrieval + streaming generation), comparison orchestration, SSE, htmx UI. In single-process mode, also runs ingestion jobs inline via the in-process queue. | always |
-| **Worker** (arq) | Ingestion pipeline stages, (re)analysis jobs off the queue; concurrency capped per provider | **scaled only** |
+| **Worker** (arq) | Ingestion pipeline stages, (re)analysis jobs, and forecast jobs off the queue; concurrency capped per provider; holds the resident TimesFM model when forecasting is enabled | **scaled only** |
 | Relational DB | Documents, chunks, analyses, conversations, usage | **SQLite** (default) → **Postgres (+ pgvector)** (scaled) |
 | Cache / Queue / Event bus | Rate-limit counters, job dispatch, SSE progress fan-out | **in-memory / in-process** (default) → **Redis** (scaled) |
 | Object storage | Original PDFs | **local disk** (default) → **S3/R2/MinIO** (scaled) |
+
+**Why forecasts run in the worker, not the API:** a TimesFM forward pass is a synchronous, CPU-bound torch call — it would block the event loop for seconds and starve every concurrent request. Forecasts therefore always go through `TaskQueue`, exactly like ingestion: an arq worker when scaled, a thread executor inside the API process in single-process mode (which keeps the loop free even without a separate process). The model is loaded once at startup and kept resident; jobs never pay checkpoint-load cost.
 
 **Why Q&A runs in the API, not the worker:** Q&A is interactive (streamed first token < 5s); it performs one retrieval + one streamed LLM call. Ingestion/analysis is minutes-long and rate-limited, so it goes through the queue. Comparison sits in between — it runs in the API when metrics are already extracted (fast path), and queues a job when re-extraction is needed.
 
@@ -58,12 +62,15 @@ app/
     llm/                # gemini.py, anthropic.py, openai.py, ollama.py
     embeddings/         # gemini.py, voyage.py, openai.py, local.py
     vectorstores/       # chroma.py, pgvector.py, qdrant.py, faiss.py
+    forecast/           # naive.py (baselines), timesfm.py, fake.py
+    marketdata/         # fixture.py, stooq.py, vendor.py
   infra/                # Cache / TaskQueue / EventBus interfaces + backends
     cache.py            #   memory | redis
     queue.py            #   inprocess | arq
     events.py           #   inprocess | redis
-  domain/               # pure logic: chunking, delta math, citation parsing, schemas
-  services/             # ingestion.py, analysis.py, qa.py, comparison.py
+  domain/               # pure logic: chunking, delta math, citation parsing, schemas,
+                        #   forecast transforms + backtest metrics
+  services/             # ingestion.py, analysis.py, qa.py, comparison.py, forecasting.py
   api/                  # routers, auth, SSE, rate limiting
   db/                   # SQLAlchemy models, Alembic migrations (sqlite | postgres)
   storage/              # object-storage client (local | s3)
@@ -74,7 +81,7 @@ tests/
   evals/                # Q&A + extraction eval fixtures
 ```
 
-Dependency rule: `api`/`services` → `domain` + the `providers`/`infra` interfaces; only `providers/*`, `infra/*`, and the factory import vendor SDKs (Gemini, `redis`, `arq`, `boto3`, `psycopg`). `domain` imports nothing above it and holds everything worth unit-testing heavily (chunker, citation validator, delta calculator).
+Dependency rule: `api`/`services` → `domain` + the `providers`/`infra` interfaces; only `providers/*`, `infra/*`, and the factory import vendor SDKs (Gemini, `redis`, `arq`, `boto3`, `psycopg`, and — for forecasting — `timesfm`/`torch` and the market-data clients). `domain` imports nothing above it and holds everything worth unit-testing heavily (chunker, citation validator, delta calculator, forecast transforms + backtest metrics).
 
 ---
 
@@ -104,6 +111,28 @@ class VectorStore(Protocol):
     def delete_by_document(self, document_id: str) -> None
 ```
 
+Forecasting (F6) adds two more of the same shape — a data source and a model, kept separate so either can be swapped alone:
+
+```python
+class MarketDataProvider(Protocol):
+    def fetch_series(self, ticker: str, start: date, end: date,
+                     interval: str) -> PriceSeries          # normalized OHLCV bars + as_of
+    @property
+    def supports_intraday(self) -> bool
+
+class ForecastProvider(Protocol):
+    def forecast(self, contexts: Sequence[Sequence[float]], horizon: int,
+                 quantiles: Sequence[float]) -> ForecastResult   # point path + quantile paths
+    @property
+    def max_context(self) -> int
+    @property
+    def supports_quantiles(self) -> bool
+    @property
+    def supports_covariates(self) -> bool
+```
+
+`ForecastResult` carries only arrays — no prose — which is why the `[n]`-citation machinery has no role in F6.
+
 ### Adapter responsibilities (what core code must never do)
 
 | Concern | Where it lives |
@@ -113,16 +142,35 @@ class VectorStore(Protocol):
 | Rate-limit backoff (429-aware, exponential + jitter), provider error → typed app error (`ProviderRateLimited`, `ProviderUnavailable`, `ProviderRefusal`) | Adapter |
 | Provider-specific optimizations: Anthropic prompt caching + adaptive thinking; Gemini context caching; Ollama JSON-mode retry loop | Adapter |
 | Token/cost accounting → `usage` table (via a shared hook the adapter calls) | Adapter + shared hook |
-| Prompt text, chunking, citation contract, delta math | Core (`domain`/`services`) — identical for all providers |
+| Checkpoint pin + download, `from_pretrained` / `compile(ForecastConfig(...))`, torch device + dtype, batching, keeping the model resident | Forecast adapter |
+| Market-data HTTP + auth, vendor rate limits, symbol quirks (exchange suffixes, split/dividend-adjusted closes), bar normalization to `PriceSeries` | Market-data adapter |
+| Prompt text, chunking, citation contract, delta math, forecast transforms + backtest metrics + skill verdict | Core (`domain`/`services`) — identical for all providers |
 
 ### Capability flags
 
 - `supports_pdf_input` — Gemini / Anthropic / OpenAI attach the original PDF for analysis calls (financial tables read better visually); the returned provider file reference is cached on `documents.provider_file_ref` so upload happens once. Ollama and other text-only models fall back to parsed text automatically.
 - The citation contract (`[n]` markers over numbered chunks) is the baseline all providers satisfy; adapters may internally upgrade to native citation features without changing the interface.
+- `supports_quantiles` — TimesFM 2.5's continuous quantile head returns nine quantile paths alongside the point forecast. Providers without one report `False`, and `domain/forecast.py` reconstructs intervals from backtest residuals instead. Core code therefore *always* has a band to render — the uncertainty requirement never depends on the provider.
+- `supports_covariates` — TimesFM 3.0 takes past-only and past-and-future covariates natively; 2.5 covers the same ground via XReg. Core code passes covariates only when the flag is set, so downgrading the checkpoint is a config change, not a crash.
+- `max_context` — the adapter reports its own limit (TimesFM 2.5: up to 16k) and the service truncates the context to it, rather than any service hard-coding a window size.
 
 ### Embedding-space guard
 
 `index_meta` records `(embedding_provider, embedding_model, dimension)` for the index. At startup the factory compares config against `index_meta`: mismatch → hard error with a re-index command (`app reindex`), which re-embeds all chunks and swaps collections atomically. Vectors from different models are never mixed.
+
+### Forecast weights & the license guard
+
+The embedding-space guard's sibling: same fail-fast posture, different failure mode. Before loading anything, the factory checks the configured checkpoint against a table of known weight licenses.
+
+| Checkpoint | Weights license | Loads by default |
+|---|---|---|
+| `google/timesfm-2.5-200m-pytorch` (default) | Apache-2.0 | yes |
+| `google/timesfm-2.0-*`, `google/timesfm-1.0-*` | Apache-2.0 | yes |
+| `google/timesfm-3.0-pytorch` | `timesfm-non-commercial-license-v1.0` — non-commercial, **non-production** | only with `forecast.weights_license_ack: true` |
+
+Unknown checkpoints are treated as restricted (deny by default). TimesFM's *source code* is Apache-2.0 in every case; it is the 3.0 weights that are encumbered — which is why a production-targeted app defaults to 2.5.
+
+Two more boot-time checks ride along: `forecast.enabled: true` requires the `forecast` extra to be importable, and `max_context`/`max_horizon` must fall within the adapter's reported limits. All three fail at startup, none at request time.
 
 ### Infrastructure backends (same pattern as providers)
 
@@ -212,6 +260,39 @@ sequenceDiagram
 
 Metrics loaded from `analyses` (queued re-extraction if missing) → deltas/growth computed in `domain/deltas.py` (pure Python, unit-tested) → qualitative chunks retrieved per dimension per document → one narrative LLM call → stored result. The model never performs arithmetic; the computed table is passed to it read-only.
 
+### 4.4 Forecast (queued)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as API
+    participant Q as Queue
+    participant W as Worker
+    participant MD as Market data source
+    participant M as TimesFM - local torch
+    participant DB as Database
+
+    U->>A: POST /forecasts {document_id or ticker, horizon}
+    A->>A: validate ticker, horizon, quota
+    A->>DB: insert forecast (status=queued) + input_hash
+    A->>Q: enqueue forecast(id)
+    A-->>U: 202 {forecast_id}
+    W->>DB: price_series cached for (ticker, interval, as_of)?
+    alt cache miss
+        W->>MD: fetch EOD bars
+        W->>DB: upsert price_series
+    end
+    W->>W: transform context (log) - domain/forecast.py
+    W->>M: forecast(context, horizon, quantiles)
+    M-->>W: point path + 9 quantile paths
+    W->>W: inverse transform, rolling-origin backtest vs naive baselines
+    W->>DB: store forecast + scorecard + skill verdict
+    W-->>A: progress events
+    A-->>U: SSE -> ready
+```
+
+Every step except the model call is computed by the worker itself, and the model call returns arrays rather than prose — so nothing here can hallucinate a number. Narration (`POST /forecasts/{id}/narrate`) is a *separate*, API-side streamed LLM call over the already-stored table, subject to the same guardrails as Q&A.
+
 ---
 
 ## 5. Data Architecture
@@ -238,9 +319,21 @@ messages       (id uuid PK, conversation_id FK, role, content text, citations js
 usage          (id bigserial PK, user_id FK, kind enum(llm|embedding), provider, model,
                 tokens_in int, tokens_out int, cost_estimate numeric, created_at)
 refresh_tokens (id uuid PK, user_id FK, token_hash, expires_at, revoked_at NULL)
+price_series   (ticker text, interval text, source text, as_of date,
+                start_date date, end_date date, bars jsonb, fetched_at,
+                PRIMARY KEY (ticker, interval, source, as_of))   -- global cache, deliberately no user_id
+forecasts      (id uuid PK, user_id FK, document_id FK→documents NULL,
+                ticker, interval, horizon int, transform text,
+                provider, model, checkpoint_revision,
+                context_start date, context_end date,
+                point jsonb, quantiles jsonb, backtest jsonb, skill text,
+                input_hash text, disclaimer_version int,
+                status enum(queued|processing|ready|failed), error text NULL, created_at)
 ```
 
-Indexes: `chunks` HNSW index on `embedding` (cosine) + btree on `(document_id)`; `documents (user_id, created_at)`; `usage (user_id, created_at)` for quota checks; partial index on `documents(status)` for worker dashboards.
+Indexes: `chunks` HNSW index on `embedding` (cosine) + btree on `(document_id)`; `documents (user_id, created_at)`; `usage (user_id, created_at)` for quota checks; partial index on `documents(status)` for worker dashboards; `forecasts (user_id, created_at)` plus a unique `(user_id, input_hash)` backing the dedupe path.
+
+`price_series` is the one table with no `user_id`, on purpose: closing prices are public and identical for every tenant, so partitioning them per user would multiply third-party API calls to buy no isolation. Ownership attaches to `forecasts` — the artifact a user actually created — and every read of it is user-scoped like everything else.
 
 When `vector_store.provider != pgvector` (Chroma/Qdrant/FAISS profiles), the `embedding` column is unused and the external store holds vectors + chunk metadata; Postgres `chunks.text` remains canonical either way.
 
@@ -260,6 +353,8 @@ PDFs are private; the UI fetches them through short-lived signed URLs generated 
 | Document delete | Object + chunks/vectors + analyses referencing only it + provider file ref, transactional where possible, idempotent cleanup job for the rest |
 | Account delete | All of the above for every document + conversations + usage, completed ≤ 24h via a cleanup job |
 | Embedding config change | Startup guard → explicit `reindex` run → new collection built → atomic swap |
+| Forecast delete / account delete | `forecasts` rows removed with the rest of the user's data; `price_series` is untouched — a shared cache of public data, evicted by TTL, holding nothing user-identifying |
+| Forecast weights/config change | Stored forecasts keep the `provider`/`model`/`checkpoint_revision` that produced them and are never silently re-attributed; a new config produces new artifacts (the `input_hash` includes it) |
 
 ---
 
@@ -307,7 +402,7 @@ Document text is untrusted input. Mitigations: system prompts instruct the model
 
 | Concern | Approach |
 |---|---|
-| Build | One multi-stage Docker image; entrypoint selects `api` or `worker`; `uv` for locked dependencies |
+| Build | One multi-stage Docker image; entrypoint selects `api` or `worker`; `uv` for locked dependencies. Forecasting is opt-in at build time: the `forecast` extra (`timesfm[torch]`) roughly doubles image size, so it ships only in images built for a forecast-enabled profile, with the HuggingFace checkpoint cache on a persistent volume and warmed at startup rather than on first request |
 | CI | lint (ruff) + typecheck (mypy) + unit/integration tests (fake provider + testcontainers Postgres) + eval set vs recorded responses |
 | Migrations | Alembic, run as a release step before rollout; migrations are backward-compatible one release back (rolling deploys) |
 | Deploy | Rolling restart behind health checks (`/healthz` liveness; `/readyz` checks DB, Redis, vector store) |
@@ -333,6 +428,7 @@ Document text is untrusted input. Mitigations: system prompts instruct the model
 | Contract | every adapter passes one shared test suite per protocol (structured output round-trip, streaming, error normalization, backoff on fake 429s) | fake HTTP servers / recorded cassettes |
 | Integration | services against `FakeLLMProvider` (deterministic canned outputs) + real Postgres/Redis via testcontainers; cross-tenant access denial per endpoint | CI |
 | Evals | ≥20 Q&A pairs with expected citations + metric-extraction fixtures against known reports | CI vs recorded responses; on-demand vs live providers (both configured providers in P5) |
+| Forecast eval | fixture price series with known continuations; the configured provider scored against seasonal-naive and drift on MASE / sMAPE / pinball / coverage | CI on the `naive` provider (hermetic, no torch); on demand with `timesfm`. Asserts the metrics are computed correctly and relative skill hasn't regressed — **not** that the model beats the baseline |
 | Load | upload + Q&A mix at target concurrency; p95 assertions | pre-release, P5 |
 
 The `FakeLLMProvider` is a first-class adapter (selected via config like any other), which keeps the entire stack testable without network access and doubles as the local-dev no-key mode.
@@ -350,3 +446,7 @@ The `FakeLLMProvider` is a first-class adapter (selected via config like any oth
 | Initial infra / process model | SQLite + in-memory, single process | Zero external services to start; the DB and cache/queue/event backends are interfaces, so Postgres + Redis is a config change, not a rewrite. Trade-off: in-memory state is per-process, so scaling *requires* selecting the Redis backends |
 | UI | Server-rendered Jinja2 + htmx | Less rich than a SPA; one deployable, SSE-friendly, easily replaced later |
 | Default LLM | Gemini 2.5 Flash free tier | Rate-limit throttled ingestion; zero cost by default, and the config system makes upgrading a one-line change |
+| Forecasting model | TimesFM, **zero-shot**, behind a `ForecastProvider` interface | No training pipeline, model registry, or retraining ops — and no ticker-specific tuning either. A fitted-model adapter (ARIMA, a trained net) can be added behind the same interface if that trade stops being worth it |
+| Forecast weights | TimesFM 2.5 (Apache-2.0) rather than 3.0 | Gives up 3.0's native covariate support — the feature that would let fundamentals condition the forecast. 3.0's weights are non-commercial and non-production, which an app that calls itself production-ready cannot default to |
+| Forecast presentation | Bands + backtest scorecard + skill verdict mandatory in every response | More to build and render than a single line on a chart. The alternative is a confident-looking curve with no error history, which is precisely this feature's most likely failure mode |
+| Forecast default state | `forecast.enabled: false` | F6 is invisible until switched on, and the docs have to explain the extra. In exchange the zero-dependency default stays honest — torch and a 200M checkpoint are not "no external services" |
