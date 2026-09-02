@@ -40,6 +40,30 @@ object_storage:
   provider: local
   path: ./data/pdfs
 
+# F6 forecasting stays on-machine: TimesFM inference is fully local, and the
+# `fixture` source needs no network. To use real bars offline, pre-seed the
+# `price_series` table; to use TimesFM, pre-download the checkpoint and run
+# with HF_HUB_OFFLINE=1 (`provider: timesfm`, `options: {local_files_only: true}`).
+market_data:
+  provider: fixture
+  interval: 1d
+  max_history_days: 3650
+  cache_ttl_s: 900
+
+forecast:
+  enabled: true
+  provider: naive
+  model: google/timesfm-2.5-200m-pytorch
+  revision: main
+  weights_license_ack: false
+  device: cpu
+  max_context: 1024
+  max_horizon: 256
+  transform: log
+  quantiles: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  backtest_windows: 8
+  cache_ttl_s: 3600
+
 chunking:
   target_tokens: 800
   overlap_tokens: 100
@@ -48,7 +72,9 @@ limits:
   max_upload_mb: 30
   max_pages: 600
   max_compare_docs: 5
+  max_forecast_horizon: 120   # trading days
   quotas:
     documents: 100
     uploads_per_day: 20
     questions_per_day: 200
+    forecasts_per_day: 50

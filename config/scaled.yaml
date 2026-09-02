@@ -37,6 +37,29 @@ object_storage:
   bucket: reports
   endpoint_env: S3_ENDPOINT
 
+# F6 forecasting, production shape: live EOD bars + TimesFM resident in the
+# WORKER process (the API replicas only enqueue). Needs an image built with the
+# `forecast` extra and a persistent HF cache volume (docker-compose.scaled.yml).
+market_data:
+  provider: stooq
+  interval: 1d
+  max_history_days: 3650
+  cache_ttl_s: 900
+
+forecast:
+  enabled: true
+  provider: timesfm
+  model: google/timesfm-2.5-200m-pytorch   # Apache-2.0; 3.0 weights need weights_license_ack
+  revision: main
+  weights_license_ack: false
+  device: cpu
+  max_context: 1024
+  max_horizon: 256
+  transform: log
+  quantiles: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  backtest_windows: 8
+  cache_ttl_s: 3600
+
 chunking:
   target_tokens: 800
   overlap_tokens: 100
@@ -45,7 +68,9 @@ limits:
   max_upload_mb: 30
   max_pages: 600
   max_compare_docs: 5
+  max_forecast_horizon: 120   # trading days
   quotas:
     documents: 100
     uploads_per_day: 20
     questions_per_day: 200
+    forecasts_per_day: 50

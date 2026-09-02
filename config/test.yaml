@@ -32,6 +32,13 @@ object_storage:
   provider: local
   path: ./data/test/pdfs
 
+market_data:
+  provider: fixture
+  interval: 1d
+
+forecast:
+  enabled: false              # the forecast API/job tests use config/test_forecast.yaml
+
 chunking:
   target_tokens: 800
   overlap_tokens: 100
@@ -40,7 +47,9 @@ limits:
   max_upload_mb: 30
   max_pages: 600
   max_compare_docs: 5
+  max_forecast_horizon: 120   # trading days
   quotas:
     documents: 100
     uploads_per_day: 20
     questions_per_day: 200
+    forecasts_per_day: 50

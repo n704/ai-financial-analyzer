@@ -293,6 +293,18 @@ sequenceDiagram
 
 Every step except the model call is computed by the worker itself, and the model call returns arrays rather than prose — so nothing here can hallucinate a number. Narration (`POST /forecasts/{id}/narrate`) is a *separate*, API-side streamed LLM call over the already-stored table, subject to the same guardrails as Q&A.
 
+**Implementation notes (P6, as built)** — decisions that refine the spec above; change them here first:
+
+- **Where the model lives.** `build_providers(..., include_forecasting=not settings.is_multiprocess)`: in single-process mode the API process loads the providers and runs the job on its own loop via `asyncio.to_thread`; in the scaled profile only the arq worker builds them (`build_forecast_providers`), so API replicas never load ~1 GB of weights. The three boot checks run in whichever process loads the model.
+- **`as_of` and dedupe.** `as_of` is the UTC calendar date of the request; it is part of `input_hash` together with the config identity (`forecast.provider/model/revision`, transform, context, quantiles, backtest windows, data source). Identical inputs while a `ready` artifact is younger than `forecast.cache_ttl_s` return it (HTTP 200); a stale or failed match is recomputed **in place** (same id, same URL) so the `(user_id, input_hash)` uniqueness holds and bookmarks survive. `price_series` rows are refreshed when older than `market_data.cache_ttl_s` — EOD vendors publish today's bar in the evening, so a same-day re-run can legitimately see one more close.
+- **Provenance** on the row is written from the provider *object* at job start (`provider`, `model`, `checkpoint_revision`, `source`), overwriting the config placeholders the API inserted at request time.
+- **Band source.** `naive` reports `supports_quantiles=False` on purpose, so the default configuration exercises the empirical-band path (per-step residual quantiles from the backtest, multiplicative in log space). `fake` and `timesfm` have quantile heads. `log_return` inverts per-step return quantiles cumulatively, which over-widens the band (perfectly correlated steps) — one reason `log` is the default.
+- **Skill verdict** = relative MAE against the *best* naive baseline on the same origins, "better than naive" only above a 5% margin (`DEFAULT_SKILL_TOLERANCE`) — with eight origins a smaller edge is noise. Seasonal-naive uses one trading week (5 bars) for daily data. A series too short for `horizon × windows + 16` bars fails with a readable error rather than a smaller backtest.
+- **Narration** today renders the stored table plus the linked document's detected metadata; the retrieved-chunk block plugs into the same prompt slot when the P3.2 retriever lands. Advice-seeking `focus` text is refused server-side (422) before any model call; the stream ends with the `forecast:{id}` citation.
+- **Quota** counts requests that create or re-run a row per UTC day (`limits.quotas.forecasts_per_day`); dedupe hits are free. No per-user override column was added to `users` (P6 changes no existing table).
+- **Default market source** (open question #7): `stooq` in `dev`/`scaled` (keyless EOD, split-adjusted), `fixture` in `test`/`offline`.
+- **UI (P6.8)** is not built yet: there is no server-rendered UI layer at all until P2's document views land; the API already returns everything the chart needs (`dates`, `median`, `quantiles`, `backtest`, `skill`, `disclaimer`).
+
 ---
 
 ## 5. Data Architecture

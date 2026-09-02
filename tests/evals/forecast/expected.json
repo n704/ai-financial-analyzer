@@ -1,0 +1,8 @@
+{
+  "naive:drift": {
+    "noisy_trend": 0.28474205132284647,
+    "random_walk": -0.02838453731060797,
+    "seasonal": null,
+    "trend": null
+  }
+}

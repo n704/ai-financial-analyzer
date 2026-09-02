@@ -1,0 +1,69 @@
+# Forecasting test profile (tests/unit/test_forecasts_api.py): same as
+# config/test.yaml but with F6 switched on — hermetic `fixture` bars and the
+# deterministic `fake` forecast provider (quantile head, so the provider-band
+# path is exercised end-to-end); the naive provider's empirical-band path is
+# covered at the service level. Own data directory so it never shares
+# SQLite/Chroma state with the other app-booting test modules.
+
+llm:
+  provider: fake
+  model: fake-llm
+
+embeddings:
+  provider: fake
+  model: fake-embedding
+
+vector_store:
+  provider: chroma
+  path: ./data/test_forecast/chroma
+  collection: chunks_test
+
+database:
+  url: sqlite:///./data/test_forecast/app.db
+
+cache:
+  backend: memory
+
+queue:
+  backend: inprocess
+
+events:
+  backend: inprocess
+
+object_storage:
+  provider: local
+  path: ./data/test_forecast/pdfs
+
+market_data:
+  provider: fixture
+  interval: 1d
+  max_history_days: 400
+  cache_ttl_s: 900
+  options:
+    seed: 7
+    known_tickers: [ACME, WIDG, BRK.B]
+
+forecast:
+  enabled: true
+  provider: fake
+  max_context: 256
+  max_horizon: 64
+  transform: log
+  quantiles: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  backtest_windows: 4
+  cache_ttl_s: 3600
+
+chunking:
+  target_tokens: 800
+  overlap_tokens: 100
+
+limits:
+  max_upload_mb: 30
+  max_pages: 600
+  max_compare_docs: 5
+  max_forecast_horizon: 30
+  quotas:
+    documents: 100
+    uploads_per_day: 20
+    questions_per_day: 200
+    forecasts_per_day: 3

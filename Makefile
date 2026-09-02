@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check run worker migrate migrate-down up up-scaled down
+.PHONY: install install-forecast lint format typecheck test check run worker migrate migrate-down up up-scaled down eval-forecast
 
 # Extras beyond the zero-ops default install: gemini (real LLM/embeddings),
 # postgres (pgvector adapter), redis (arq queue + Redis cache/events), storage
@@ -8,6 +8,11 @@ EXTRAS := --extra gemini --extra postgres --extra redis --extra storage --extra 
 
 install:        ## Install dependencies (incl. dev group + all provider/infra extras)
 	uv sync $(EXTRAS)
+
+# Not part of `install`/CI on purpose: timesfm[torch] is ~2 GB and the whole F6
+# flow runs (and is tested) on `forecast.provider: naive` without it.
+install-forecast: ## Add the F6 extra (TimesFM + torch) for `forecast.provider: timesfm`
+	uv sync $(EXTRAS) --extra forecast
 
 lint:           ## Ruff lint
 	uv run ruff check .
@@ -20,6 +25,9 @@ typecheck:      ## mypy on app/
 
 test:           ## Run pytest (fake provider, SQLite, in-memory — no external services)
 	uv run pytest
+
+eval-forecast:  ## Forecast eval (P6.9) against the configured provider; FORECAST_EVAL_PROVIDER=timesfm for the real model
+	uv run pytest tests/evals/forecast -q
 
 check: lint typecheck test  ## Lint + typecheck + test (what CI runs)
 

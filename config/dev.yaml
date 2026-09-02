@@ -40,6 +40,31 @@ object_storage:
   provider: local             # local | s3
   path: ./data/pdfs
 
+# --- F6 market forecasting (SPEC.md §3.6) -------------------------------------
+# Off by default: torch + a 200M-parameter checkpoint are not "zero external
+# services". Flip `enabled: true` and the whole flow runs on the dependency-free
+# `naive` provider (drift/last-value/seasonal-naive as a ForecastProvider);
+# switch `provider: timesfm` after `uv sync --extra forecast` — config only.
+market_data:
+  provider: stooq             # fixture | stooq   (keyless EOD bars; fixture = synthetic, no network)
+  interval: 1d
+  max_history_days: 3650
+  cache_ttl_s: 900            # price_series rows younger than this are served from the DB cache
+
+forecast:
+  enabled: false
+  provider: naive             # naive | fake | timesfm
+  model: google/timesfm-2.5-200m-pytorch   # used by timesfm; Apache-2.0 weights
+  revision: main
+  weights_license_ack: false  # required to load non-commercial weights (TimesFM 3.0)
+  device: cpu
+  max_context: 1024
+  max_horizon: 256
+  transform: log              # level | log | log_return
+  quantiles: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  backtest_windows: 8
+  cache_ttl_s: 3600           # identical request within this window returns the stored artifact
+
 chunking:
   target_tokens: 800
   overlap_tokens: 100
@@ -48,10 +73,12 @@ limits:
   max_upload_mb: 30
   max_pages: 600
   max_compare_docs: 5
+  max_forecast_horizon: 120   # trading days
   quotas:
     documents: 100
     uploads_per_day: 20
     questions_per_day: 200
+    forecasts_per_day: 50
 
 # Note: in-memory cache/queue/events keep state inside one process — they imply a
 # single-process deployment. Switch the three backends to redis (config/scaled.yaml)

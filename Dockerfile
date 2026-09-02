@@ -11,7 +11,9 @@ WORKDIR /app
 # Extras needed by *some* profile this image might run: gemini (dev.yaml's
 # default LLM/embeddings), postgres + redis (scaled.yaml), storage (S3/MinIO
 # in scaled.yaml). Not `offline` — that profile targets bare-metal per
-# ARCHITECTURE.md §7, not this container.
+# ARCHITECTURE.md §7, not this container. Not `forecast` either, by default:
+# torch + TimesFM roughly double the image, so only the worker image in
+# docker-compose.scaled.yml adds `--extra forecast` (ARCHITECTURE.md §7).
 ARG PROFILE_EXTRAS="--extra gemini --extra postgres --extra redis --extra storage --extra parse"
 
 # Cache dependency layer separately from source.

@@ -1,12 +1,13 @@
-"""Background job definitions (P2.1), shared by both dispatch paths:
+"""Background job definitions (P2.1, P6.6), shared by both dispatch paths:
 
 - the in-process queue, registered directly inside the API process
   (``app/main.py``'s lifespan) when ``queue.backend: inprocess`` (default);
 - the arq worker (``app/worker.py``), when ``queue.backend: arq`` (scaled).
 
-One job body (:func:`run_ingest_document`), two thin call shims — each queue
+One job body per job (:func:`run_ingest_document` here; the forecast job in
+``app/services/forecasting.py``), two thin call shims each — each queue
 backend's own module adapts its calling convention (arq passes a ``ctx`` dict
-positionally; the in-process queue calls with keyword args only) to this
+positionally; the in-process queue calls with keyword args only) to the
 shared function, so the actual job logic is never duplicated or backend-aware.
 """
 
@@ -16,17 +17,40 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.config import Settings
 from app.db.base import session_scope
 from app.db.repositories import DocumentRepository
 from app.infra.base import EventBus
+from app.providers.base import ForecastProvider, MarketDataProvider
 
 INGEST_DOCUMENT_JOB = "ingest_document"
+FORECAST_JOB = "forecast"
 
 
 def document_channel(document_id: str) -> str:
     """The ``EventBus`` channel a document's ingestion progress is published
     to and streamed from (``GET /api/v1/documents/{id}/events``)."""
     return f"document:{document_id}"
+
+
+def forecast_channel(forecast_id: str) -> str:
+    """The ``EventBus`` channel a forecast job's progress is published to and
+    streamed from (``GET /api/v1/forecasts/{id}/events``) — the same bus as
+    ingestion (SPEC.md §4, "Forecast inference is a job")."""
+    return f"forecast:{forecast_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class ForecastRuntime:
+    """What the forecast job needs beyond the DB and the event bus: the two F6
+    providers (resident in this process) and the config knobs the pipeline
+    reads. ``None`` on a ``JobContext`` means this process cannot run forecast
+    jobs — ``forecast.enabled`` is off, or this is an API replica that only
+    enqueues them."""
+
+    market_data: MarketDataProvider
+    forecast: ForecastProvider
+    settings: Settings
 
 
 @dataclass(slots=True)
@@ -36,6 +60,7 @@ class JobContext:
 
     session_factory: sessionmaker[Session]
     events: EventBus
+    forecasting: ForecastRuntime | None = None
 
 
 async def run_ingest_document(job_ctx: JobContext, *, document_id: str, user_id: str) -> None:

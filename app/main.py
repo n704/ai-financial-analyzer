@@ -1,11 +1,13 @@
 """FastAPI application factory (P1.13).
 
 Wires config → DB engine/session factory → provider bundle (with the
-embedding-space guard) → infra bundle → object storage → auth, and exposes
-auth + document routes plus ``/healthz``/``/readyz``. On the default
-``inprocess`` queue backend, ingestion jobs (P2.1) are registered and run
-inline in this process; on ``arq``, the separate ``app.worker`` process runs
-them instead (same job body, ``app/services/jobs.py``).
+embedding-space guard and, when ``forecast.enabled``, the forecast boot
+checks) → infra bundle → object storage → auth, and exposes auth + document +
+forecast routes plus ``/healthz``/``/readyz``. On the default ``inprocess``
+queue backend, ingestion (P2.1) and forecast (P6.6) jobs are registered and
+run inline in this process; on ``arq``, the separate ``app.worker`` process
+runs them instead (same job bodies) and holds the resident forecast model, so
+this process skips loading it.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from fastapi import FastAPI
 from sqlalchemy.engine import make_url
 
 from app import __version__
-from app.api import documents, ops
+from app.api import documents, forecasts, ops
 from app.api.auth.router import router as auth_router
 from app.api.middleware import RateLimitMiddleware, RequestContextMiddleware
 from app.api.state import AppState
@@ -32,7 +34,14 @@ from app.infra import build_infra
 from app.infra.queue import InProcessQueue
 from app.logging import configure_logging
 from app.providers import build_providers
-from app.services.jobs import INGEST_DOCUMENT_JOB, JobContext, run_ingest_document
+from app.services.forecasting import run_forecast_job
+from app.services.jobs import (
+    FORECAST_JOB,
+    INGEST_DOCUMENT_JOB,
+    ForecastRuntime,
+    JobContext,
+    run_ingest_document,
+)
 from app.storage import build_object_storage
 
 log = structlog.get_logger()
@@ -69,6 +78,8 @@ def _validate_secrets_eagerly(settings: Settings) -> None:
         settings.object_storage.resolve_signing_secret()
     settings.llm.resolve_api_key()
     settings.embeddings.resolve_api_key()
+    if settings.forecast.enabled:
+        settings.market_data.resolve_api_key()
 
 
 async def _build_app_state(settings: Settings) -> AppState:
@@ -79,17 +90,34 @@ async def _build_app_state(settings: Settings) -> AppState:
     session_factory = build_session_factory(engine)
 
     with session_scope(session_factory) as session:
-        providers = build_providers(settings, session=session)
+        # The forecast model is resident in whichever process drains the
+        # queue: this one in single-process mode, the arq worker when scaled —
+        # API replicas there only enqueue, so they skip loading ~1 GB of weights.
+        providers = build_providers(
+            settings, session=session, include_forecasting=not settings.is_multiprocess
+        )
 
     infra = await build_infra(settings)
     storage = build_object_storage(settings)
 
     if isinstance(infra.queue, InProcessQueue):
-        # Single-process mode: ingestion runs inline in this process's event
-        # loop (ARCHITECTURE.md §2). On `queue.backend: arq`, `app.worker`
-        # registers the same job body instead — this process only enqueues.
-        job_ctx = JobContext(session_factory=session_factory, events=infra.events)
+        # Single-process mode: jobs run inline in this process's event loop
+        # (ARCHITECTURE.md §2). On `queue.backend: arq`, `app.worker` registers
+        # the same job bodies instead — this process only enqueues.
+        forecasting = (
+            ForecastRuntime(
+                market_data=providers.forecasting.market_data,
+                forecast=providers.forecasting.forecast,
+                settings=settings,
+            )
+            if providers.forecasting is not None
+            else None
+        )
+        job_ctx = JobContext(
+            session_factory=session_factory, events=infra.events, forecasting=forecasting
+        )
         infra.queue.register(INGEST_DOCUMENT_JOB, functools.partial(run_ingest_document, job_ctx))
+        infra.queue.register(FORECAST_JOB, functools.partial(run_forecast_job, job_ctx))
 
     return AppState(
         settings=settings,
@@ -104,10 +132,13 @@ async def _build_app_state(settings: Settings) -> AppState:
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = load_settings()
     app.state.app_state = await _build_app_state(settings)
+    forecasting = app.state.app_state.providers.forecasting
     log.info(
         "app.startup",
         llm_provider=app.state.app_state.providers.llm.provider,
         database=settings.database.url,
+        forecast_enabled=settings.forecast.enabled,
+        forecast_provider=forecasting.forecast.provider if forecasting else None,
     )
     yield
     log.info("app.shutdown")
@@ -126,6 +157,7 @@ def create_app() -> FastAPI:
     app.include_router(ops.router)
     app.include_router(auth_router)
     app.include_router(documents.router)
+    app.include_router(forecasts.router)
 
     return app
 

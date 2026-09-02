@@ -1,15 +1,18 @@
 """Typed configuration schema (SPEC.md §4).
 
 Every swappable component — LLM, embeddings, vector store, database, cache, queue,
-event bus, object storage — is a field here. Application code reads these typed
-models; it never re-parses YAML or inspects env vars directly. Secrets are *named*
-here (``api_key_env``), never *stored* here: the resolver reads the env var on
-demand so a Settings object can be safely held in memory without holding secrets.
+event bus, object storage, market-data source, forecasting model — is a field
+here. Application code reads these typed models; it never re-parses YAML or
+inspects env vars directly. Secrets are *named* here (``api_key_env``), never
+*stored* here: the resolver reads the env var on demand so a Settings object can
+be safely held in memory without holding secrets.
 """
 
 from __future__ import annotations
 
 import os
+import re
+from itertools import pairwise
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
@@ -110,16 +113,128 @@ class ChunkingConfig(_Base):
     overlap_tokens: int = 100
 
 
+# Bar intervals: a count plus a unit. Sub-daily units need a market-data source
+# with `supports_intraday=True` (checked by the factory at startup, never on the
+# first request); the default `1d` is what every source, incl. `fixture`, serves.
+_INTERVAL = re.compile(r"^(\d+)(m|h|d|wk|mo)$")
+_INTRADAY_UNITS = frozenset({"m", "h"})
+
+ForecastTransform = Literal["level", "log", "log_return"]
+ForecastDevice = Literal["cpu", "cuda", "mps"]
+
+
+def is_bar_interval(value: str) -> bool:
+    """Whether ``value`` is a well-formed bar interval (``1d``, ``1wk``, ``5m``...).
+    Shared by the config check and the forecast API's per-request validation."""
+    return _INTERVAL.fullmatch(value) is not None
+
+
+class MarketDataConfig(_Base):
+    """Market-data source selection (F6). ``fixture`` is hermetic (deterministic
+    synthetic bars — CI and the offline profile); ``stooq`` is the keyless live
+    EOD source; keyed vendors name their key via ``api_key_env``."""
+
+    provider: str = "fixture"
+    api_key_env: str | None = None
+    interval: str = "1d"
+    max_history_days: int = Field(default=3650, ge=30)
+    cache_ttl_s: int = Field(default=900, ge=0)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_interval(self) -> MarketDataConfig:
+        if not _INTERVAL.fullmatch(self.interval):
+            raise ConfigError(
+                f"market_data.interval={self.interval!r} is not a bar interval "
+                f"(expected <count><unit>, unit in m|h|d|wk|mo, e.g. '1d')"
+            )
+        return self
+
+    @property
+    def is_intraday(self) -> bool:
+        match = _INTERVAL.fullmatch(self.interval)
+        return match is not None and match.group(2) in _INTRADAY_UNITS
+
+    def resolve_api_key(self) -> SecretStr | None:
+        if self.api_key_env is None:
+            return None
+        value = os.environ.get(self.api_key_env)
+        if not value:
+            raise ConfigError(
+                f"market_data.provider '{self.provider}' names "
+                f"api_key_env='{self.api_key_env}', but that environment variable "
+                f"is unset or empty"
+            )
+        return SecretStr(value)
+
+
+class ForecastConfig(_Base):
+    """Forecasting model selection (F6, SPEC.md §3.6/§4).
+
+    ``enabled`` defaults to ``False``: torch plus a 200M-parameter checkpoint are
+    not "zero external services", so F6 is a deliberate opt-in
+    (``uv sync --extra forecast``). ``provider: naive`` is a fully working,
+    dependency-free configuration — the baselines exposed as a provider — so the
+    whole flow runs and is testable with torch absent (PLAN.md P6.4).
+
+    ``model``/``revision`` pin the checkpoint (provenance on every artifact);
+    ``weights_license_ack`` is the license gate — non-commercially-licensed
+    weights (TimesFM 3.0) refuse to load without it, and unknown checkpoints are
+    treated as restricted (ARCHITECTURE.md §3, "Forecast weights & the license
+    guard"). ``options`` carries adapter tuning (``naive``: ``method``;
+    ``timesfm``: ``torch_compile``, ``normalize_inputs``) that core code never
+    reads.
+    """
+
+    enabled: bool = False
+    provider: str = "naive"
+    model: str = "google/timesfm-2.5-200m-pytorch"
+    revision: str = "main"
+    weights_license_ack: bool = False
+    device: ForecastDevice = "cpu"
+    max_context: int = Field(default=1024, ge=16)
+    max_horizon: int = Field(default=256, ge=1)
+    transform: ForecastTransform = "log"
+    quantiles: list[float] = Field(
+        default_factory=lambda: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    )
+    backtest_windows: int = Field(default=8, ge=1)
+    cache_ttl_s: int = Field(default=3600, ge=0)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_quantiles(self) -> ForecastConfig:
+        """The band is not optional (SPEC.md §3.6): every forecast ships its
+        median and its 10-90% interval, so those three levels are mandatory,
+        and the list must be a strictly increasing set of probabilities."""
+        levels = self.quantiles
+        if any(not 0.0 < q < 1.0 for q in levels):
+            raise ConfigError("forecast.quantiles must all lie strictly between 0 and 1")
+        if any(b <= a for a, b in pairwise(levels)):
+            raise ConfigError("forecast.quantiles must be strictly increasing")
+        for required in (0.1, 0.5, 0.9):
+            if not any(abs(q - required) < 1e-9 for q in levels):
+                raise ConfigError(
+                    f"forecast.quantiles must include {required} — the median path "
+                    f"and the 10-90% band are mandatory on every forecast"
+                )
+        return self
+
+
 class QuotasConfig(_Base):
     documents: int = 100
     uploads_per_day: int = 20
     questions_per_day: int = 200
+    forecasts_per_day: int = 50
 
 
 class LimitsConfig(_Base):
     max_upload_mb: int = 30
     max_pages: int = 600
     max_compare_docs: int = 5
+    # Trading days. Beyond this the rolling-origin backtest can't support the
+    # claim (SPEC.md §4; open question #10 keeps the exact cap adjustable).
+    max_forecast_horizon: int = Field(default=120, ge=1)
     quotas: QuotasConfig = Field(default_factory=QuotasConfig)
 
 
@@ -160,6 +275,8 @@ class Settings(_Base):
     queue: QueueConfig = Field(default_factory=QueueConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
     object_storage: ObjectStorageConfig = Field(default_factory=ObjectStorageConfig)
+    market_data: MarketDataConfig = Field(default_factory=MarketDataConfig)
+    forecast: ForecastConfig = Field(default_factory=ForecastConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
@@ -199,6 +316,16 @@ class Settings(_Base):
             ("postgresql", "postgres")
         ):
             raise ConfigError("vector_store.provider='pgvector' requires a PostgreSQL database.url")
+
+        # The API validates a requested horizon against limits.max_forecast_horizon
+        # before queueing; if that could exceed what the model is compiled for,
+        # the job would fail after the 202. Catch it at load instead.
+        if self.forecast.enabled and self.limits.max_forecast_horizon > self.forecast.max_horizon:
+            raise ConfigError(
+                f"limits.max_forecast_horizon={self.limits.max_forecast_horizon} exceeds "
+                f"forecast.max_horizon={self.forecast.max_horizon}; the API would accept "
+                f"horizons the forecasting model is not compiled to serve"
+            )
         return self
 
     @property

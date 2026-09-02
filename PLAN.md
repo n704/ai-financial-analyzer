@@ -157,6 +157,8 @@ Prove the abstraction, then make it operable.
 
 ## P6 — Market forecasting (1.5 weeks)
 
+**Status:** P6.1–P6.7 and P6.9 implemented (API-complete, tested on the `naive`/`fake` providers with hermetic fixture bars; the TimesFM adapter is written against the 2.5 torch API and gated behind the `forecast` extra). P6.8 (UI) waits for the UI layer from P2. Decisions that refine the spec are recorded in ARCHITECTURE.md §4.4 "Implementation notes".
+
 Adds the F6 flow (SPEC §3.6). Built in the same order as P1 — interfaces, fakes, and baselines first, the real model last — so nothing downstream ever depends on torch being installed.
 
 ### Seams → P1.1–P1.3

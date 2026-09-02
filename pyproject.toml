@@ -39,6 +39,10 @@ parse = ["pymupdf>=1.24", "pdfplumber>=0.11"]
 postgres = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
 redis = ["arq>=0.26", "redis>=5.0"]
 storage = ["boto3>=1.35"]
+# F6 forecasting: TimesFM + torch (~2 GB installed) plus the 200M checkpoint at
+# first use. Deliberately NOT in `make install`/CI — `forecast.provider: naive`
+# runs the whole flow without it (PLAN.md P6.4).
+forecast = ["timesfm[torch]>=2.0", "numpy>=1.26"]
 
 [dependency-groups]
 dev = [
@@ -100,6 +104,8 @@ module = [
     "boto3.*",
     "botocore.*",
     "pgvector.*",
+    "timesfm.*",
+    "torch.*",
 ]
 ignore_missing_imports = true
 

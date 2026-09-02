@@ -18,7 +18,15 @@ services:
       minio: {condition: service_started}
 
   worker:
-    build: .
+    # The worker is the process that holds the resident TimesFM model
+    # (config/scaled.yaml: forecast.enabled + provider: timesfm), so its image
+    # is built with the `forecast` extra (torch + timesfm); the API image is
+    # not — API replicas only enqueue forecast jobs. The HuggingFace cache
+    # lives on a volume so the checkpoint is downloaded once, not per restart.
+    build:
+      context: .
+      args:
+        PROFILE_EXTRAS: "--extra gemini --extra postgres --extra redis --extra storage --extra parse --extra forecast"
     command: ["worker"]
     environment:
       APP_CONFIG: config/scaled.yaml
@@ -27,9 +35,12 @@ services:
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: minio
       S3_SECRET_KEY: minio12345
+      HF_HOME: /app/data/hf
     env_file:
       - path: .env
         required: false
+    volumes:
+      - hf_cache:/app/data/hf   # pinned TimesFM checkpoint, fetched once
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_started}
@@ -64,3 +75,4 @@ services:
 volumes:
   pg_data:
   minio_data:
+  hf_cache:
