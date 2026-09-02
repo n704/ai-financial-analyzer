@@ -41,7 +41,7 @@ object_storage:
 # WORKER process (the API replicas only enqueue). Needs an image built with the
 # `forecast` extra and a persistent HF cache volume (docker-compose.scaled.yml).
 market_data:
-  provider: stooq
+  provider: stooq             # keyless, but see the JS-challenge caveat in app/providers/marketdata/stooq.py
   interval: 1d
   max_history_days: 3650
   cache_ttl_s: 900

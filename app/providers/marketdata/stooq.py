@@ -1,6 +1,12 @@
 """Stooq ``MarketDataProvider`` (P6.2): keyless end-of-day bars over a plain
 CSV endpoint — the least-friction live source (SPEC.md open question #7).
 
+Caveat (observed 2026-09): stooq now fronts this endpoint with a JavaScript
+proof-of-work challenge for non-browser clients, on every request and
+regardless of headers. The adapter detects that page and reports the source
+as unavailable by name — it does not attempt to solve the challenge. Where
+that is the case, use ``fixture`` or a keyed vendor adapter instead.
+
 Vendor specifics kept in here, per ARCHITECTURE.md §3: the symbol convention
 (lower-case, US listings suffixed ``.us``, share-class dots written as dashes
 — ``BRK.B`` → ``brk-b.us``), the CSV layout, "No data" as the not-found
@@ -80,6 +86,17 @@ class StooqMarketDataProvider:
             response = self._client.get(STOOQ_URL, params=params)
             if response.status_code == 429 or response.status_code >= 500:
                 raise _Transient(response.status_code)
+            if _looks_like_browser_challenge(response.text):
+                # Stooq answers non-browser clients with a JavaScript
+                # proof-of-work page (observed 2026-09). Not retryable, and not
+                # something an unattended service should try to solve: report
+                # it as the source being unavailable, by name.
+                raise MarketDataUnavailable(
+                    f"stooq answered with a browser-verification page instead of CSV for "
+                    f"{symbol!r} (HTTP {response.status_code}); this keyless source is not "
+                    f"reachable from unattended clients on this network — use a keyed "
+                    f"market_data.provider or the fixture source"
+                )
             if response.status_code != 200:
                 raise MarketDataUnavailable(
                     f"stooq returned HTTP {response.status_code} for {symbol!r}"
@@ -108,6 +125,11 @@ class StooqMarketDataProvider:
         return PriceSeries(
             ticker=ticker.upper(), interval=interval, source=self.provider, as_of=end, bars=bars
         )
+
+
+def _looks_like_browser_challenge(body: str) -> bool:
+    head = body.lstrip()[:512].lower()
+    return head.startswith("<!doctype html") or head.startswith("<html")
 
 
 class _Transient(Exception):

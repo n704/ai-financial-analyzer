@@ -47,6 +47,8 @@ object_storage:
 # switch `provider: timesfm` after `uv sync --extra forecast` — config only.
 market_data:
   provider: stooq             # fixture | stooq   (keyless EOD bars; fixture = synthetic, no network)
+                              # NOTE: stooq currently answers non-browser clients with a JS challenge
+                              # from some networks; a forecast then fails with a readable error.
   interval: 1d
   max_history_days: 3650
   cache_ttl_s: 900            # price_series rows younger than this are served from the DB cache

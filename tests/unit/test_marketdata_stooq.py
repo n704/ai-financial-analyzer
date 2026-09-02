@@ -103,3 +103,18 @@ def test_unsupported_interval() -> None:
         _provider(httpx.MockTransport(lambda r: httpx.Response(200))).fetch_series(
             "AAPL", dt.date(2026, 3, 1), dt.date(2026, 3, 5), "5m"
         )
+
+
+def test_browser_challenge_page_is_reported_by_name() -> None:
+    challenge = (
+        "<!DOCTYPE html><html><head></head><body><noscript>This site requires JavaScript "
+        "to verify your browser.</noscript><script>/* proof of work */</script></body></html>"
+    )
+
+    def gated(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text=challenge)
+
+    with pytest.raises(MarketDataUnavailable, match="browser-verification page"):
+        _provider(httpx.MockTransport(gated)).fetch_series(
+            "AAPL", dt.date(2026, 3, 1), dt.date(2026, 3, 5), "1d"
+        )
